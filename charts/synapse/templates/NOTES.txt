@@ -10,11 +10,12 @@
 
    kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "synapse.fullname" . }}
 
-{{- if ne .Values.ml.models "none" }}
+{{- if .Values.ml.enabled }}
 
-   NOTE: ml.models is "{{ .Values.ml.models }}", so the first start downloads models
-   before the server is ready. This can take 15-30 minutes. The startup probe
-   allows {{ mul .Values.probes.startup.failureThreshold .Values.probes.startup.periodSeconds }}s; raise probes.startup.failureThreshold if that is not enough.
+   NOTE: ml.enabled is true, so the first start builds the Python environment
+   (~4GB) before the server is ready - 8-30 minutes depending on the node and
+   on ml.models ("{{ .Values.ml.models }}"). The startup probe allows {{ mul .Values.probes.startup.failureThreshold .Values.probes.startup.periodSeconds }}s.
+   Later starts reuse the persisted environment and are fast.
 {{- end }}
 
 2. Reach the database:
@@ -34,9 +35,16 @@
 3. Open a GQL console inside the cluster:
 
    kubectl -n {{ .Release.Namespace }} exec -it {{ include "synapse.fullname" . }}-0 -- \
-     synapse gql --grpc --address 127.0.0.1 --port {{ .Values.server.grpc.port }}
+     synapse gql --host 127.0.0.1 --port {{ .Values.server.grpc.port }} --user {{ .Values.auth.username }}
 
 4. Retrieve the admin credentials:
+{{- if not .Values.auth.enforcePassword }}
+
+   WARNING: auth.enforcePassword is false. The server seeds its admin account
+            with a built-in password and ignores what installation is given, so
+            unless you have already changed it through GQL this deployment is
+            reachable with that default.
+{{- end }}
 
 {{- if .Values.auth.existingSecret }}
    kubectl -n {{ .Release.Namespace }} get secret {{ .Values.auth.existingSecret }} \
@@ -55,6 +63,11 @@
 {{- end }}
 
 {{- if eq (include "synapse.clusterEnabled" .) "true" }}
+
+Cluster mode needs an image built with the "cluster" Cargo feature. Without it
+the server ignores the peer list and starts as a single node - and so would
+every other pod. The container checks for this at start-up and exits with an
+explanatory message rather than letting {{ .Values.replicaCount }} separate databases form.
 
 Cluster status:
 

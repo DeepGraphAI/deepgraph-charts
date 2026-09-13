@@ -33,10 +33,15 @@ tier:
   existingLicenseSecret: synapse-license
 
 ml:
-  # No downloads attempted. Graph traversal, vector search over embeddings
-  # you supply, and full-text search all work. What is unavailable is
-  # generating embeddings inside the database.
-  models: none
+  # Nothing is fetched from outside. With the AI runtime off, the server
+  # starts directly rather than trying to build a Python environment from a
+  # package index it cannot reach - which in an air-gapped cluster stalls
+  # until the startup probe expires and crash-loops the pod.
+  #
+  # Graph traversal, vector search over embeddings you supply, and full-text
+  # search all work. What is unavailable is generating embeddings inside the
+  # database.
+  enabled: false
 
 server:
   logFormat: json

@@ -32,7 +32,7 @@ persistence:
     enabled: false
 
 ml:
-  models: none
+  enabled: false
 
 server:
   logLevel: debug

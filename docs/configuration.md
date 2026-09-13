@@ -41,10 +41,22 @@ databases behind one Service. The chart warns at install time. See
 | `auth.existingSecret` | `""` | Read credentials from this Secret instead |
 | `auth.secretKeys.username` | `SYNAPSE_USER` | Key within `existingSecret` |
 | `auth.secretKeys.password` | `SYNAPSE_PASSWORD` | Key within `existingSecret` |
+| `auth.enforcePassword` | `true` | Apply `auth.password` at every start |
 
-These apply **only on first start**, against an empty data directory. Changing
-them on an existing deployment does nothing to who can log in - rotate the
-password through GQL instead.
+`auth.enforcePassword` is what makes `auth.password` real. The server seeds its
+admin account with a hardcoded password during installation and ignores the
+credentials installation is given, so without this the deployment would come up
+on that built-in default however you configured it - silently. The chart applies
+the server's own reset path instead, in a process that exits before the server
+opens the database so the new password holds from the first boot.
+
+Because it re-applies on every start, the values file stays the source of truth
+and an out-of-band `ALTER USER` change is reverted at the next restart. Set it
+to `false` to manage the password in GQL instead. Full detail in
+[security.md](security.md#how-the-password-actually-gets-set).
+
+`auth.username` is only used for client connections; the admin account name
+itself is fixed by the server.
 
 ## Tier and licensing
 
@@ -105,21 +117,27 @@ pipeline. Use `text` only when a human is reading the terminal.
 
 | Value | Default | Description |
 |---|---|---|
-| `ml.models` | `none` | `none`, `all`, or a comma-separated subset |
-| `ml.persistence.mlEnv.enabled` | `false` | Persist the Python environment |
-| `ml.persistence.mlEnv.size` | `20Gi` | |
+| `ml.enabled` | `false` | Build and use the Python/AI runtime |
+| `ml.models` | `none` | `none`, `all`, or a subset. Ignored when disabled |
+| `ml.persistence.mlEnv.enabled` | `true` | Persist the Python environment |
+| `ml.persistence.mlEnv.size` | `10Gi` | Measured at ~4GB |
 | `ml.persistence.models.enabled` | `false` | Persist the model cache |
 | `ml.persistence.models.size` | `30Gi` | |
 
-`none` is the default because a pod that spends 15-30 minutes downloading models
-before reporting ready is a bad Kubernetes default. Graph traversal, vector
-search over embeddings you supply, and full-text search all work in that mode.
-What you lose is computing embeddings and running extraction inside the
-database.
+The image's entrypoint builds a ~4GB Python environment on first start whether
+or not you use an AI feature, because the server binary links against libpython.
+That takes 8-30 minutes and needs egress to a package index.
 
-If you set anything other than `none`, enable both persistence volumes -
-otherwise every restart repeats the work - and raise
-`probes.startup.failureThreshold` to cover it.
+The server does not require it. A missing environment is a start-up warning, not
+an error: graph traversal, vector search over embeddings you supply, full-text
+search and the whole GQL surface work without it. Only the in-database AI
+features - register or load a model, compute embeddings, extraction - need it.
+
+So `ml.enabled` defaults to `false` and the chart starts the server directly,
+which takes about 20 seconds. Turn it on when you want Synapse computing
+embeddings itself; keep `ml.persistence.mlEnv` on so restarts do not repeat the
+build, and raise `probes.startup.failureThreshold` to at least 240 (the chart
+refuses to render otherwise).
 
 ## Server configuration file
 
@@ -147,7 +165,7 @@ disagree.
 
 | Value | Default | Description |
 |---|---|---|
-| `cluster.enabled` | `false` | Turn on Raft replication |
+| `cluster.enabled` | `false` | Turn on Raft replication. Needs a `cluster`-feature image |
 | `cluster.raftPort` | `5701` | Raft RPC |
 | `cluster.admin.enabled` | `true` | Admin gRPC for `synapsectl` |
 | `cluster.admin.port` | `5702` | |
@@ -161,8 +179,10 @@ disagree.
 | `cluster.tls.enabled` | `false` | mTLS between Raft peers |
 | `cluster.tls.existingSecret` | `""` | Secret with `ca.crt`, `tls.crt`, `tls.key` |
 
-See [clustering.md](clustering.md) for what these do and how to operate a
-cluster.
+Multi-node Raft is a non-default build feature, and a server without it ignores
+the peer list and starts as a single node rather than failing - so every pod
+becomes its own database. The chart checks the binary at start-up and refuses to
+run instead. See [clustering.md](clustering.md#prerequisites).
 
 ## Services and exposure
 
@@ -209,14 +229,14 @@ cannot be changed by `helm upgrade`. See
 |---|---|---|
 | `probes.startup.enabled` | `true` | |
 | `probes.startup.periodSeconds` | `10` | |
-| `probes.startup.failureThreshold` | `60` | 10 minutes of budget |
+| `probes.startup.failureThreshold` | `60` | 10 minutes of budget. At least 240 when `ml.enabled` |
 | `probes.liveness.*` | see values | |
 | `probes.readiness.*` | see values | |
 
 The startup probe is what gives a slow start room without loosening the liveness
 threshold afterwards. Raise `failureThreshold` when the graph is large enough
-that index rebuild takes a while, or when `ml.models` is not `none`. Startup
-budget in seconds is `failureThreshold × periodSeconds`.
+that index rebuild takes a while, or when `ml.enabled` is on. Startup budget in
+seconds is `failureThreshold × periodSeconds`.
 
 Readiness hits `/health/ready`, which reports 503 until storage, catalog and the
 session manager are all up - so a pod is kept out of the Service until it can
@@ -261,7 +281,7 @@ single node failure costs quorum.
 | `networkPolicy.allowExternalEgress` | `true` | |
 
 `containerSecurityContext.readOnlyRootFilesystem` is `false` because first-run
-setup writes into `/app`. It can be turned on with `ml.models: none` and an
+setup writes into `/app`. It can be turned on with `ml.enabled: false` and an
 image that needs no first-run work.
 
 See [security.md](security.md).

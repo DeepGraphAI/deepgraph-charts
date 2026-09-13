@@ -5,8 +5,8 @@
 #   helm install synapse synapse/synapse -f examples/01-minimal.yaml
 #
 # What you get: one pod, 50Gi of persistent storage, gRPC on 50051, the
-# bundled UI and REST API on 8080, and no model downloads - so the pod is
-# ready in well under a minute.
+# bundled UI and REST API on 8080, and no Python/AI runtime - so the pod is
+# ready in about 20 seconds.
 #
 # What you do NOT get, and should read the other examples for: TLS,
 # restricted network access, metrics scraping, or any redundancy.

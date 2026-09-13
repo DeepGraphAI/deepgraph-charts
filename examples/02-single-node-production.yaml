@@ -38,10 +38,11 @@ server:
     timeoutSeconds: 120
 
 ml:
-  # No model downloads: graph, vector and text search all work without them.
-  # Only the built-in embedding and extraction pipelines need them, and
-  # those are covered in the AI example.
-  models: none
+  # The Python/AI runtime is off, so the server starts directly instead of
+  # spending 8-30 minutes building a ~4GB environment first. Graph, vector
+  # and text search all work without it; only in-database embedding and
+  # extraction need it, and those are covered in the AI example.
+  enabled: false
 
 persistence:
   data:

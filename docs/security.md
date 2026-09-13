@@ -27,9 +27,54 @@ Secret in plaintext, which means `helm get values` prints it, and it stays in
 release history across upgrades. With `existingSecret` the chart only ever
 references the name.
 
-**These credentials apply only on first start**, against an empty data
-directory. Changing them later updates the Secret and changes nothing about who
-can log in. Rotate through GQL instead:
+### How the password actually gets set
+
+Worth knowing, because the obvious assumption is wrong and the failure is
+silent.
+
+The server seeds its admin account during first-start installation with a
+**hardcoded password**, and it ignores the credentials the install command is
+given. So passing `--user` and `--password` to installation - which is what the
+image's own entrypoint does - has no effect on the resulting account. A
+deployment set up that way comes up on the built-in default no matter what you
+configured, and nothing reports it.
+
+The only supported way to set a real password is the server's admin-password
+reset, which runs at start-up when the account already exists. The chart drives
+that for you, controlled by `auth.enforcePassword` (on by default):
+
+```yaml
+auth:
+  existingSecret: synapse-admin
+  enforcePassword: true
+```
+
+There is a timing detail the chart handles. The reset writes the new password to
+the catalog, but the process performing it keeps serving from an authentication
+cache populated beforehand, so that same process still accepts the old password
+until something reloads it. Letting the server reset its own password therefore
+leaves the entire first boot as a window in which the built-in default is valid.
+The chart applies the reset in a short-lived process that exits before the server
+opens the database, so the server starts from the updated catalog and the
+configured password is in force from the first boot.
+
+Verify it, rather than assuming:
+
+```bash
+# Should succeed
+kubectl -n synapse exec -it synapse-0 -- synapse-client \
+  --host 127.0.0.1 --port 50051 --user admin --password "$YOUR_PASSWORD"
+
+# Should be rejected
+kubectl -n synapse exec -it synapse-0 -- synapse-client \
+  --host 127.0.0.1 --port 50051 --user admin --password admin123
+```
+
+Because the reset runs on every start, the values file stays the source of
+truth: a password changed out of band with `ALTER USER` is reverted at the next
+restart. If you would rather manage it in GQL, set
+`auth.enforcePassword: false` - but only after a password change has landed, or
+the deployment sits on the built-in default.
 
 ```gql
 ALTER USER admin SET PASSWORD 'new-password';
@@ -113,13 +158,37 @@ networkPolicy:
 Empty `allowedClients` means every pod in the release namespace, which is a
 reasonable starting point but not a restriction worth much.
 
-Two deliberate choices in the generated policy:
+Three deliberate choices in the generated policy:
 
 - **Metrics scraping stays open cluster-wide** even when client access is
   restricted. Naming the Prometheus namespace explicitly means monitoring breaks
   silently the day it moves.
 - **Raft and admin ports accept only Synapse pods of the same release.** These
   are not client ports and nothing else should reach them.
+- **The chart's own `helm test` pod is allowed through** to the HTTP port. It
+  runs in the release namespace, so a narrow `allowedClients` would otherwise
+  block it and turn a working deployment into a failing test.
+
+### Verify enforcement on your cluster
+
+NetworkPolicy is enforced by the CNI, not by Kubernetes itself, and support
+varies. Some implementations enforce the default-deny that a policy implies but
+do not correctly match `podSelector` or `namespaceSelector` peers, which
+produces a policy that blocks everything - including traffic you allowed.
+
+That fails closed rather than open, so it is an availability problem rather than
+a security one, but it is worth knowing before you find out during an incident:
+
+```bash
+# With the policy on, from a pod that should be allowed
+kubectl -n applications run nettest --rm -it --image=curlimages/curl:8.11.1 -- \
+  curl -sS --max-time 8 http://synapse.synapse.svc.cluster.local:8080/health
+```
+
+If that fails while the same request succeeds with the policy deleted, and
+`helm test` also fails only when the policy is on, the CNI is not matching the
+selectors. Check what your cluster runs (`kubectl -n kube-system get pods`) and
+its NetworkPolicy support before relying on `allowedClients`.
 
 For a locked-down namespace, deny egress too:
 
@@ -131,8 +200,8 @@ networkPolicy:
 The chart keeps a DNS rule, without which nothing resolves - including Raft peer
 FQDNs. Anything else the deployment needs to reach (an OTLP collector, an
 external identity provider, a data source it ingests from) must be added
-explicitly via `extraManifests`. Note that `ml.models` other than `none` needs
-egress to the model hub and will hang without it.
+explicitly via `extraManifests`. Note that `ml.enabled: true` needs egress to a
+package index and the model hub, and stalls without it.
 
 ## Pod and container hardening
 
@@ -157,7 +226,7 @@ what the image needs:
 
 - **`runAsUser: 0`.** First-run setup writes into `/app` - the Python
   environment, the model cache. An image built with those pre-staged and
-  `ml.models: none` can run as non-root; set `runAsNonRoot: true` with a
+  `ml.enabled: false` can run as non-root; set `runAsNonRoot: true` with a
   matching `runAsUser`/`fsGroup` and test it.
 - **`readOnlyRootFilesystem: false`.** Same reason. Turning it on with a
   first-run image produces a crash at start-up, not a security improvement.

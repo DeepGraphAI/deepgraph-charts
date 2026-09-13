@@ -195,7 +195,7 @@ not:
 
 ```bash
 kubectl -n synapse exec -it synapse-0 -- \
-  synapse gql --grpc --address 127.0.0.1 --port 50051
+  synapse gql --host 127.0.0.1 --port 50051 --user admin
 ```
 
 ```gql

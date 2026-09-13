@@ -6,12 +6,15 @@
 #
 #   helm install synapse synapse/synapse -n synapse -f examples/08-ai-embeddings.yaml
 #
-# Read this before you install: the first start takes 15-30 minutes and
-# needs egress to the model hub. That work is what the two extra volumes
-# below preserve - without them every pod restart repeats it.
+# Read this before you install: the first start builds a ~4GB Python
+# environment and then downloads models, which together take somewhere
+# between 8 and 30 minutes and need egress to a package index and the model
+# hub. That work is what the two extra volumes below preserve - without them
+# every pod restart repeats it.
 #
 # If you only need vector search over embeddings your application computes
-# elsewhere, you do not need any of this. Use example 02 instead.
+# elsewhere, you do not need any of this. Use example 02 instead, where the
+# pod is ready in about 20 seconds.
 
 image:
   repository: ghcr.io/deepgraphai/synapse
@@ -25,12 +28,17 @@ tier:
   existingLicenseSecret: synapse-license
 
 ml:
+  # The one example that turns this on. Everything below exists to make that
+  # affordable: the environment is ~4GB and takes 8-30 minutes to build.
+  enabled: true
+
   # "all" pulls every bundled model. A comma-separated subset is usually
   # better: name only what you actually call, e.g. "qwen,spacy".
   models: all
 
   persistence:
-    # The Python environment built on first start. ~10-15Gi.
+    # The Python environment built on first start. Measured at ~4GB.
+    # Without this volume every pod restart repeats the whole build.
     mlEnv:
       enabled: true
       size: 20Gi
@@ -58,9 +66,10 @@ persistence:
 
 probes:
   startup:
-    # 60 minutes. The environment build and model download both happen
+    # 60 minutes. The environment build and model downloads both happen
     # before the server listens, and a startup probe that expires partway
-    # through leaves you with a crash loop and a half-populated cache.
+    # through leaves a crash loop and a half-populated cache. The chart
+    # refuses to render with ml.enabled and a budget under 30 minutes.
     failureThreshold: 360
     periodSeconds: 10
 

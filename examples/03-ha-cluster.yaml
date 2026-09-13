@@ -5,10 +5,16 @@
 # voters the cluster survives losing one node.
 #
 # Prerequisites:
-#   1. A Secret holding the cluster mTLS material (ca.crt, tls.crt, tls.key).
+#   1. An image built with the "cluster" Cargo feature. It is NOT on by
+#      default, and a server without it does not reject this configuration -
+#      it ignores the peer list and starts as a single node, as does every
+#      other pod, leaving three diverging databases behind one Service. The
+#      chart checks the binary at start-up and refuses to run instead. Build
+#      with: ./scripts/build.sh --release --features cluster
+#   2. A Secret holding the cluster mTLS material (ca.crt, tls.crt, tls.key).
 #      The Raft port carries replicated writes, so this is not optional in
 #      production - see docs/clustering.md for issuing it with cert-manager.
-#   2. Storage that can be provisioned per pod (each replica gets its own
+#   3. Storage that can be provisioned per pod (each replica gets its own
 #      PVC; there is no shared volume).
 #
 #   helm install synapse synapse/synapse -n synapse -f examples/03-ha-cluster.yaml
@@ -108,7 +114,7 @@ server:
     debugEndpoints: false
 
 ml:
-  models: none
+  enabled: false
 
 networkPolicy:
   enabled: true

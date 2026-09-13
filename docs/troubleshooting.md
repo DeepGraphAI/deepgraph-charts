@@ -71,7 +71,8 @@ kubectl -n synapse logs synapse-0 --previous
 | Symptom in the log | Cause | Fix |
 |---|---|---|
 | Killed with no error, exit 137 | OOM | Raise `resources.limits.memory`. See below |
-| Hangs at model download, then killed | `ml.models` is not `none` without egress | Set `ml.models: none` |
+| `FATAL: this image cannot run a multi-node cluster` | The image lacks the `cluster` build feature | Rebuild with `--features cluster`, or set `cluster.enabled=false`. See below |
+| Stalls installing Python packages, then killed | `ml.enabled` with no egress, or too small a startup budget | Set `ml.enabled: false`, or allow egress and raise `probes.startup.failureThreshold` |
 | `Permission denied` on `/synapse-data` | `fsGroup` does not match the volume | Leave `podSecurityContext.fsGroup` at the default |
 | `SYNAPSE_LICENSE_KEY required` | Tier requires a license | Set `tier.licenseKey` or `tier.existingLicenseSecret` |
 | Config parse error | Invalid `config.synapseToml`, or a hand-written `[cluster]` section | Remove `[cluster]`; the chart generates it |
@@ -82,16 +83,42 @@ The startup probe expired. Budget is
 `probes.startup.failureThreshold × probes.startup.periodSeconds`, 600s by
 default.
 
-Index rebuild time scales with graph size, and with `ml.models` other than
-`none` the first start also builds a Python environment and downloads models -
-15 to 30 minutes. A probe that gives up partway produces a crash loop that looks
-like a broken image.
+With the default `ml.enabled: false` a pod is ready in about 20 seconds, so this
+almost always means index rebuild on a large graph. With `ml.enabled: true` the
+first start also builds a ~4GB Python environment - 8 to 30 minutes - and a
+probe that gives up partway produces a crash loop that looks like a broken
+image. The chart refuses to render `ml.enabled` with a budget under 30 minutes
+for exactly this reason.
 
 ```yaml
 probes:
   startup:
     failureThreshold: 360   # 60 minutes at periodSeconds: 10
 ```
+
+### Every cluster pod says "initialized as cluster-of-one leader"
+
+The image was built without the `cluster` Cargo feature. A server without it
+does not reject a multi-node configuration - it ignores `cluster.peers` and
+bootstraps alone, and so does every other pod, leaving N independent databases
+behind one Service that diverge from the first write.
+
+The chart checks for this at container start-up and exits rather than let it
+happen, so in practice you see the crash, not the divergence:
+
+```
+[bootstrap] FATAL: this image cannot run a multi-node cluster.
+```
+
+Check an image:
+
+```bash
+docker run --rm --entrypoint sh <image> -c \
+  'grep -aq "cluster.listen must be set" /app/bin/synapse-server && echo supported || echo NOT supported'
+```
+
+Fix by rebuilding with `./scripts/build.sh --release --features cluster`, or set
+`cluster.enabled=false` and run a single replica.
 
 ### Running but never Ready
 
@@ -164,22 +191,50 @@ kubectl -n applications run nettest --rm -it --image=busybox -- \
   nc -zv synapse.synapse.svc.cluster.local 50051
 ```
 
-### Authentication fails with the password you set
-
-Almost always this: `auth.username` and `auth.password` are consumed **only on
-first start**, against an empty data directory. Changing them later updates the
-Secret and nothing else.
+If **everything** is blocked, including `helm test` and pods that clearly match
+`allowedClients`, suspect the CNI rather than the rules. Some implementations
+enforce the default-deny a policy implies without correctly matching
+`podSelector` / `namespaceSelector` peers, so every rule fails to match and the
+policy blocks all traffic. Confirm by deleting the policy:
 
 ```bash
-# What the pod was actually given
+kubectl -n synapse delete networkpolicy synapse   # then retry the connection
+```
+
+If that fixes it, the policy is not the problem - the CNI's NetworkPolicy
+support is. Either switch to a CNI that implements it fully, or leave
+`networkPolicy.enabled: false` and restrict access another way.
+
+### Authentication fails with the password you set
+
+First check what the pod was actually given:
+
+```bash
 kubectl -n synapse get secret synapse-credentials -o jsonpath='{.data.SYNAPSE_PASSWORD}' | base64 -d
 ```
 
-To change it for real:
+If that matches what you configured, confirm the reset ran:
 
-```gql
-ALTER USER admin SET PASSWORD 'new-password';
+```bash
+kubectl -n synapse logs synapse-0 | grep -i "admin password"
 ```
+
+You should see `applying the configured admin password` from the bootstrap
+script. If instead the built-in default still works, `auth.enforcePassword` is
+off - the server seeds its admin account with a hardcoded password and ignores
+what installation is given, so nothing else sets it:
+
+```bash
+helm upgrade synapse synapse/synapse -n synapse --reuse-values \
+  --set auth.enforcePassword=true
+```
+
+The reverse case: a password you changed with `ALTER USER` stops working after a
+restart. That is `auth.enforcePassword` doing its job - it re-applies the values
+file on every start. Either update `auth.password`, or set
+`auth.enforcePassword: false` and manage it in GQL.
+
+See [security.md](security.md#how-the-password-actually-gets-set).
 
 ---
 

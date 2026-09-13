@@ -43,9 +43,7 @@ spec:
         {{- if not .Values.config.existingConfigMap }}
         checksum/toml: {{ include (print $.Template.BasePath "/configmap-toml.yaml") . | sha256sum }}
         {{- end }}
-        {{- if $clustered }}
         checksum/bootstrap: {{ include (print $.Template.BasePath "/configmap-bootstrap.yaml") . | sha256sum }}
-        {{- end }}
         {{- if .Values.observability.podAnnotations.enabled }}
         {{- if .Values.server.http.enabled }}
         prometheus.io/scrape: "true"
@@ -123,11 +121,9 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if $clustered }}
           command:
             - /bin/bash
             - /etc/synapse-bootstrap/bootstrap.sh
-          {{- end }}
           args:
             - serve
             {{- if .Values.server.http.enabled }}
@@ -225,6 +221,23 @@ spec:
                   name: {{ .Values.auth.existingSecret }}
                   key: {{ .Values.auth.secretKeys.password }}
             {{- end }}
+            {{- if .Values.auth.enforcePassword }}
+            # The server seeds its admin account with a hardcoded default and
+            # ignores the password given to the install step, so without this
+            # the deployment would come up on that default no matter what
+            # auth.password says. This is the server's own reset path, applied
+            # at start-up, and it is what actually makes auth.password real.
+            - name: SYNAPSE_ADMIN_RESET_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.auth.existingSecret }}
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.password }}
+                  {{- else }}
+                  name: {{ include "synapse.fullname" . }}-credentials
+                  key: SYNAPSE_PASSWORD
+                  {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -293,10 +306,10 @@ spec:
             - name: config
               mountPath: /etc/synapse
               readOnly: true
-            {{- if $clustered }}
             - name: bootstrap
               mountPath: /etc/synapse-bootstrap
               readOnly: true
+            {{- if $clustered }}
             - name: runtime-config
               mountPath: /run/synapse
             {{- if .Values.cluster.tls.enabled }}
@@ -312,11 +325,11 @@ spec:
             {{- end }}
             - name: staging
               mountPath: {{ .Values.server.stagingDir }}
-            {{- if .Values.ml.persistence.mlEnv.enabled }}
+            {{- if and .Values.ml.enabled .Values.ml.persistence.mlEnv.enabled }}
             - name: ml-env
               mountPath: /app/micromamba
             {{- end }}
-            {{- if .Values.ml.persistence.models.enabled }}
+            {{- if and .Values.ml.enabled .Values.ml.persistence.models.enabled }}
             - name: models
               mountPath: /app/models
             {{- end }}
@@ -330,11 +343,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "synapse.configMapName" . }}
-        {{- if $clustered }}
         - name: bootstrap
           configMap:
             name: {{ include "synapse.fullname" . }}-bootstrap
             defaultMode: 0755
+        {{- if $clustered }}
         - name: runtime-config
           emptyDir: {}
         {{- if .Values.cluster.tls.enabled }}
@@ -357,7 +370,9 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-  {{- if or .Values.persistence.data.enabled .Values.ml.persistence.mlEnv.enabled .Values.ml.persistence.models.enabled }}
+  {{- $mlEnvPvc := and .Values.ml.enabled .Values.ml.persistence.mlEnv.enabled }}
+  {{- $modelsPvc := and .Values.ml.enabled .Values.ml.persistence.models.enabled }}
+  {{- if or .Values.persistence.data.enabled $mlEnvPvc $modelsPvc }}
   volumeClaimTemplates:
     {{- if .Values.persistence.data.enabled }}
     - metadata:
@@ -378,7 +393,7 @@ spec:
         storageClassName: {{ .Values.persistence.data.storageClass }}
         {{- end }}
     {{- end }}
-    {{- if .Values.ml.persistence.mlEnv.enabled }}
+    {{- if $mlEnvPvc }}
     - metadata:
         name: ml-env
         labels:
@@ -397,7 +412,7 @@ spec:
         storageClassName: {{ .Values.ml.persistence.mlEnv.storageClass }}
         {{- end }}
     {{- end }}
-    {{- if .Values.ml.persistence.models.enabled }}
+    {{- if $modelsPvc }}
     - metadata:
         name: models
         labels:

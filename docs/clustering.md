@@ -25,13 +25,46 @@ requiring one more node to agree on every write - strictly worse on both axes.
 
 ## Prerequisites
 
-1. **Three or more schedulable nodes.** With `podAntiAffinity.type: hard` the
-   pods refuse to co-locate, and a two-node cluster leaves the third pod
-   `Pending` forever.
-2. **Per-pod storage.** Any StorageClass that provisions `ReadWriteOnce`.
-3. **mTLS material.** The Raft port carries replicated writes. Without TLS they
-   cross the network in the clear, and the server logs a warning saying so on
-   every start.
+**1. An image built with the `cluster` feature.** This one is easy to miss and
+expensive to miss, so it goes first.
+
+Multi-node Raft is a non-default Cargo feature. A server built without it does
+not reject a multi-node configuration - it ignores `cluster.peers` and
+bootstraps as a single-node cluster. Every pod does the same, so instead of one
+replicated database you get N independent ones behind a single Service, and they
+diverge from the first write. Nothing in the server log says this happened; the
+only hint is `initialized as cluster-of-one leader` appearing on every pod
+instead of one.
+
+The chart checks for this at start-up and refuses to run rather than let it
+happen:
+
+```
+[bootstrap] FATAL: this image cannot run a multi-node cluster.
+```
+
+Build the image with the feature enabled:
+
+```bash
+./scripts/build.sh --release --features cluster
+```
+
+To check an image you already have:
+
+```bash
+docker run --rm --entrypoint sh <image> -c \
+  'grep -aq "cluster.listen must be set" /app/bin/synapse-server && echo supported || echo NOT supported'
+```
+
+**2. Three or more schedulable nodes.** With `podAntiAffinity.type: hard` the
+pods refuse to co-locate, and a two-node cluster leaves the third pod `Pending`
+forever.
+
+**3. Per-pod storage.** Any StorageClass that provisions `ReadWriteOnce`.
+
+**4. mTLS material.** The Raft port carries replicated writes. Without TLS they
+cross the network in the clear, and the server logs a warning saying so on every
+start.
 
 ### Issuing the cluster certificate
 
@@ -74,9 +107,14 @@ helm install synapse synapse/synapse -n synapse -f examples/03-ha-cluster.yaml
 
 What the chart does that a single-node install does not:
 
-- Adds a `bootstrap.sh` ConfigMap and runs it as the container command. It
-  derives the pod's ordinal from its hostname, writes a per-pod `[cluster]`
-  section, and execs the normal entrypoint.
+- Checks the binary for multi-node support and refuses to start without it.
+- Writes a per-pod `[cluster]` section into the bootstrap script's generated
+  config, derived from the pod's ordinal.
+- Sets `off_row.enabled = false`. Off-row payload bytes live on the leader and
+  are not replicated, so a follower would hold references to property data it
+  cannot fetch and promoting it would lose that data. The server refuses to
+  start in a multi-node configuration with off-row storage on, so the chart
+  turns it off rather than letting the pod crash-loop on a config error.
 - Sets `podManagementPolicy: OrderedReady`, so pod 0 is ready before pod 1
   starts.
 - Exports `SYNAPSE_INIT_CLUSTER=1` on ordinal 0 only. That node seeds the

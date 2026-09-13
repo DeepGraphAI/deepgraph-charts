@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "synapse.labels" . | nindent 4 }}
+    # The NetworkPolicy allows this label through to the HTTP port. Without
+    # it, enabling networkPolicy would make the chart's own test fail.
+    synapse.deepgraph.ai/test-pod: "true"
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded

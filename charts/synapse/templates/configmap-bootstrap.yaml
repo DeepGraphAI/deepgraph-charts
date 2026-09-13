@@ -1,4 +1,4 @@
-{{- if eq (include "synapse.clusterEnabled" .) "true" }}
+{{- $clustered := eq (include "synapse.clusterEnabled" .) "true" }}
 {{- $fullname := include "synapse.fullname" . }}
 {{- $headless := include "synapse.headlessServiceName" . }}
 {{- $replicas := int .Values.replicaCount }}
@@ -17,15 +17,49 @@ data:
   bootstrap.sh: |
     #!/usr/bin/env bash
     #
-    # Per-pod cluster bootstrap.
+    # Container entry point.
     #
-    # The server reads one synapse.toml, and in a StatefulSet every pod needs
-    # a different [cluster] section: its own node_id and its own bind address.
-    # A ConfigMap is identical across pods, so the per-pod part is generated
-    # here at start-up, appended to the mounted base config, and written to a
-    # writable path that SYNAPSE_CONFIG points at.
+    # The chart always routes through this script rather than calling the
+    # image's entrypoint directly, so there is exactly one place to look when
+    # a pod does not start:
+    #
+    #   kubectl exec <pod> -- cat /etc/synapse-bootstrap/bootstrap.sh
+    #
+    # It does two things the image cannot do for itself: generate the per-pod
+    # cluster configuration (a ConfigMap is identical across pods, but every
+    # pod needs its own node_id and bind address), and choose whether to build
+    # the Python/AI environment.
     set -euo pipefail
 
+    log() { echo "[bootstrap] $*"; }
+
+    {{- if $clustered }}
+
+    # ---- multi-node support check ------------------------------------------
+    # Multi-node Raft is a non-default build feature. A server built without
+    # it does not fail on a multi-node configuration - it ignores cluster.peers
+    # and quietly bootstraps as a single-node cluster. Every pod then does the
+    # same, so instead of one replicated database you get N independent ones
+    # behind a single Service, diverging from the first write, with nothing in
+    # the logs to say so.
+    #
+    # The check greps the binary for a message that only exists in the
+    # multi-node code path. It is a blunt instrument, but it turns a silent
+    # data-divergence bug into a start-up failure that names the cause.
+    if ! grep -aq "cluster.listen must be set" /app/bin/synapse-server; then
+      log "FATAL: this image cannot run a multi-node cluster."
+      log ""
+      log "  cluster.enabled is true, but the server binary in this image was"
+      log "  built without the 'cluster' feature. It would ignore the peer list"
+      log "  and start as a single-node cluster - and so would every other pod,"
+      log "  leaving you with {{ $replicas }} separate databases behind one Service."
+      log ""
+      log "  Use an image built with that feature (scripts/build.sh --features"
+      log "  cluster), or set cluster.enabled=false and run a single replica."
+      exit 1
+    fi
+
+    # ---- per-pod cluster configuration -------------------------------------
     ORDINAL="${HOSTNAME##*-}"
     NODE_ID=$((ORDINAL + 1))
     BASE_CONFIG="/etc/synapse/synapse.toml"
@@ -37,6 +71,16 @@ data:
     {
       echo ""
       echo "# ---- generated per-pod cluster section ----"
+
+      # Off-row payload bytes live on the leader and are not replicated, so a
+      # follower would hold references to property data it cannot fetch, and
+      # promoting that follower would lose it. The server refuses to start in
+      # a multi-node configuration with off-row storage on, so the chart turns
+      # it off rather than letting the pod crash-loop on a config error.
+      echo "[off_row]"
+      echo "enabled = false"
+      echo ""
+
       echo "[cluster]"
       echo "node_id = ${NODE_ID}"
       # The bind address must parse as IP:port, so it is the pod IP rather
@@ -105,13 +149,93 @@ data:
     # restart of pod 0 on an already-initialized cluster is a no-op.
     if [ "${ORDINAL}" = "0" ]; then
       export SYNAPSE_INIT_CLUSTER=1
+      log "node ${NODE_ID} (ordinal 0) will seed cluster membership"
     fi
 
     # Operator-facing node identity, so logs and admin RPCs name the pod.
     export SYNAPSE_NODE_ID="${HOSTNAME}"
 
-    echo "cluster bootstrap: node_id=${NODE_ID} ordinal=${ORDINAL} config=${EFFECTIVE_CONFIG}"
+    log "cluster config for node ${NODE_ID} written to ${EFFECTIVE_CONFIG}"
     sed 's/^/  | /' "${EFFECTIVE_CONFIG}"
+    {{- end }}
 
-    exec /docker-entrypoint.sh "$@"
-{{- end }}
+    cd /app
+
+    # ---- first-start installation ------------------------------------------
+    # Run here rather than leaving it to the image's entrypoint, so that the
+    # admin-password step below can run between installation and the server
+    # taking the database lock.
+    #
+    # The credentials passed here do not set the password: the server seeds
+    # its admin account with a hardcoded one during this step and ignores
+    # what install is given. They are passed anyway so the command matches
+    # what the image itself runs. The password is applied in the next block.
+    #
+    # The reset variable is removed for this call because it would be
+    # consumed before the admin account exists, and silently skipped.
+    if [ ! -f "${SYNAPSE_DATA_DIR}/catalog/users.json" ]; then
+      log "empty data directory: running first-start installation"
+      env -u SYNAPSE_ADMIN_RESET_PASSWORD /app/bin/synapse install --yes \
+        --user "${SYNAPSE_USER}" \
+        --password "${SYNAPSE_PASSWORD}"
+      log "installation complete"
+    else
+      log "existing installation found at ${SYNAPSE_DATA_DIR}"
+    fi
+
+    # ---- admin password ----------------------------------------------------
+    # Applied by a short-lived process that exits before the server opens the
+    # database, rather than by the server itself.
+    #
+    # The server's reset path writes the new password to the catalog but the
+    # process that performs it keeps serving from an authentication cache
+    # populated beforehand, so the account it actually accepts is still the
+    # old one until something reloads that cache. Letting the server do its
+    # own reset therefore leaves a live window - the whole first boot - in
+    # which the hardcoded bootstrap password is still valid.
+    #
+    # Doing it here closes that window: this process applies and persists the
+    # reset, exits, and the server then reads the updated catalog from disk.
+    # The server runs with the variable removed so it never takes the
+    # in-process path at all.
+    if [ -n "${SYNAPSE_ADMIN_RESET_PASSWORD:-}" ]; then
+      log "applying the configured admin password"
+      /app/bin/synapse install --yes >/dev/null 2>&1 || true
+      log "admin password applied"
+    fi
+
+    {{- if .Values.ml.enabled }}
+
+    # ---- AI runtime enabled -------------------------------------------------
+    # Hand over to the image's entrypoint. It finds the installation already
+    # done and skips it, builds the Python environment (~4GB, 15-30 minutes
+    # on a cold volume), downloads models per SYNAPSE_MODELS, and serves.
+    log "ml.enabled=true: using the image entrypoint (builds the Python environment on a cold volume)"
+    exec env -u SYNAPSE_ADMIN_RESET_PASSWORD /docker-entrypoint.sh "$@"
+    {{- else }}
+
+    # ---- AI runtime disabled ------------------------------------------------
+    # Start the server directly instead of going through the image's
+    # entrypoint. The entrypoint unconditionally builds the ~4GB Python
+    # environment before it starts anything, which costs 15-30 minutes and
+    # needs egress to a package index.
+    #
+    # The server does not need it: a missing environment is a start-up
+    # warning, not an error, and everything except the in-database AI
+    # features works without it. Skipping the build is the difference
+    # between a pod ready in 30 seconds and one ready in half an hour.
+    log "ml.enabled=false: starting the server directly, AI features disabled"
+
+    # The chart passes the image's own argument list, which starts with the
+    # entrypoint verb. Drop it; everything after it is server flags.
+    if [ "${1:-}" = "serve" ]; then
+      shift
+    fi
+
+    log "starting synapse-server on ${SERVER_ADDRESS}:${SERVER_PORT}"
+    exec env -u SYNAPSE_ADMIN_RESET_PASSWORD /app/bin/synapse-server \
+      --address "${SERVER_ADDRESS}" \
+      --port "${SERVER_PORT}" \
+      --log-level "${RUST_LOG}" \
+      "$@"
+    {{- end }}

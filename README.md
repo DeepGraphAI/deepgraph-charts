@@ -33,7 +33,9 @@ off by default and turned on individually.
 - Kubernetes 1.23 or newer
 - Helm 3.8 or newer
 - A StorageClass that can provision `ReadWriteOnce` volumes
-- For cluster mode: three or more nodes, and a Secret holding Raft mTLS material
+- For cluster mode: an image built with the `cluster` Cargo feature (it is not
+  on by default), three or more nodes, and a Secret holding Raft mTLS material.
+  See [docs/clustering.md](docs/clustering.md#prerequisites)
 
 ## Examples
 
@@ -78,12 +80,16 @@ known password and reachable ports is not a useful default. In anything beyond
 a laptop, use `auth.existingSecret` so the password does not end up in a values
 file or in Helm release history.
 
-**`ml.models`** defaults to `none`, which means no model downloads and a pod
-that is ready in under a minute. Graph traversal, vector search over embeddings
-you supply, and full-text search all work in that mode. Set it to `all` or a
-subset only if you need Synapse to compute embeddings or run extraction itself,
-and read [example 08](examples/08-ai-embeddings.yaml) first - first start then
-takes 15-30 minutes and needs egress.
+**`ml.enabled`** defaults to `false`, and that is the difference between a pod
+ready in about 20 seconds and one ready in 8-30 minutes.
+
+The image's entrypoint builds a ~4GB Python environment on first start, whether
+or not you use any AI feature. The server does not need it - a missing
+environment is a start-up warning, and graph traversal, vector search over
+embeddings you supply, and full-text search all work without it. So the chart
+starts the server directly and skips the build. Turn `ml.enabled` on when you
+want Synapse computing embeddings or running extraction itself, and read
+[example 08](examples/08-ai-embeddings.yaml) first.
 
 ## Replicas are not redundancy unless cluster mode is on
 

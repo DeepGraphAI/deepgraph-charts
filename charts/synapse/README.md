@@ -53,8 +53,10 @@ you are most likely to change.
 | `replicaCount` | `1` | See the note below |
 | `auth.password` | `""` | **Required** unless `auth.existingSecret` |
 | `auth.existingSecret` | `""` | Preferred over an inline password |
+| `auth.enforcePassword` | `true` | Without it the server keeps its built-in password |
 | `tier.level` | `enterprise` | Gates available features |
-| `ml.models` | `none` | `none`, `all`, or a subset |
+| `ml.enabled` | `false` | Build the Python/AI runtime. Costs 8-30 min on first start |
+| `ml.models` | `none` | Models to fetch when `ml.enabled` |
 | `persistence.data.size` | `50Gi` | Immutable after install |
 | `persistence.data.storageClass` | `""` | Cluster default if empty |
 | `resources.limits.memory` | `8Gi` | The value that matters most |
@@ -74,11 +76,12 @@ you are most likely to change.
 `auth.existingSecret`. A database that ships with a known password on reachable
 ports is not a useful default.
 
-**`ml.models` is `none`.** No model downloads, so the pod is ready in under a
-minute. Graph traversal, vector search over embeddings you supply, and full-text
-search all work. Set it to `all` or a subset only if Synapse itself needs to
-compute embeddings or run extraction - first start then takes 15-30 minutes and
-needs egress.
+**`ml.enabled` is `false`.** The image builds a ~4GB Python environment on first
+start whether or not you use an AI feature. The server does not need it, so the
+chart starts the server directly: ready in about 20 seconds instead of 8-30
+minutes. Graph traversal, vector search over embeddings you supply, and
+full-text search all work this way. Turn it on when Synapse itself needs to
+compute embeddings or run extraction.
 
 ## Replicas are not redundancy on their own
 
@@ -98,6 +101,9 @@ deployment:
 - `observability.serviceMonitor.enabled` or `ingress.enabled` without
   `server.http.enabled`
 - `tier.licenseKey` and `tier.existingLicenseSecret` both set
+- `ml.enabled` with a startup-probe budget too small for the environment build
+- `cluster.enabled` on an image built without multi-node support (checked at
+  container start-up, since the chart cannot inspect the image at render time)
 
 ## Testing
 

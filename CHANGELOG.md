@@ -5,27 +5,60 @@ they deploy. `appVersion` tracks Synapse; `version` tracks the chart.
 
 ## 0.1.0
 
-First release.
+First release. Validated against a real Synapse image on a k3s cluster, not
+only by rendering - several of the defaults below exist because that testing
+contradicted the obvious assumption.
+
+### Deployment
 
 - StatefulSet with per-pod persistent storage, gRPC on 50051 and the HTTP
   listener (UI, REST, health, metrics) on 8080.
 - Optional BOLT listener for Neo4j-compatible drivers.
-- Multi-node Raft clustering, with per-pod configuration generated at start-up
-  from the StatefulSet ordinal, seed-node election on ordinal 0, optional peer
-  mTLS, and an admin port for `synapsectl`.
-- Probes wired to `/health/live` and `/health/ready`, with a startup probe
-  sized for index rebuild and first-run model downloads.
+- Multi-node Raft clustering: per-pod configuration generated at start-up from
+  the StatefulSet ordinal, seed election on ordinal 0, optional peer mTLS, and
+  an admin port for `synapsectl`.
+- Probes wired to `/health/live` and `/health/ready`, so a pod stays out of the
+  Service until storage, catalog and the session manager are all up.
 - Observability: ServiceMonitor, PrometheusRule with seven alerts, a 36-panel
   Grafana dashboard, and OTLP trace export.
 - Istio `PeerAuthentication`, `Gateway`, `VirtualService` and `DestinationRule`.
-  Outlier detection is deliberately omitted in cluster mode, where ejecting the
-  leader would take the write path down.
-- NetworkPolicy, PodDisruptionBudget, Ingress, and hooks for extra env,
-  volumes, containers and manifests.
-- `values.schema.json`, so a mistyped key fails at `helm install` rather than
-  being silently ignored.
-- Render-time guards for combinations that cannot work: no admin password,
-  clustering without persistence, metrics or ingress without the HTTP listener,
-  two license sources.
-- Ten documented example values files, a companion observability stack, and
-  eight user guides.
+  Outlier detection is omitted in cluster mode, where ejecting the leader would
+  take the write path down rather than route around a bad replica.
+- NetworkPolicy, PodDisruptionBudget, Ingress, and hooks for extra env, volumes,
+  containers and manifests.
+
+### Defaults that came out of testing
+
+- **`ml.enabled: false`.** The image builds a ~4GB Python environment on first
+  start whether or not any AI feature is used. The server does not need it - a
+  missing environment is a start-up warning - so the chart starts the server
+  directly. Measured: 20 seconds to ready, against 7m45s with the build.
+- **`auth.enforcePassword: true`.** The server seeds its admin account with a
+  hardcoded password and ignores the credentials installation is given, so
+  `auth.password` alone has no effect and the deployment comes up on a known
+  default. The chart applies the server's reset path in a process that exits
+  before the server opens the database, so the configured password holds from
+  the first boot.
+- **`off_row.enabled = false` in cluster mode.** Off-row payload bytes are not
+  replicated; the server refuses to start a multi-node configuration with them
+  on, so the chart turns them off rather than letting the pod crash-loop.
+
+### Guards
+
+Refused at render time: no admin password; clustering without persistence;
+metrics or ingress without the HTTP listener; two license sources; `ml.enabled`
+with a startup-probe budget too small for the environment build.
+
+Refused at container start-up, where the image has to be inspected: cluster mode
+on an image built without the `cluster` Cargo feature. Such a server ignores the
+peer list and starts alone, as would every other pod, producing N independent
+databases behind one Service that diverge from the first write - the chart exits
+with an explanatory message instead.
+
+`values.schema.json` catches mistyped keys at install rather than ignoring them.
+
+### Documentation
+
+Ten example values files, a companion Prometheus/Loki/Grafana/Tempo stack, and
+eight guides. `scripts/validate.sh` renders every example plus 23 feature
+combinations and asserts the guards reject what they should.

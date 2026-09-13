@@ -59,9 +59,14 @@ kubectl -n synapse rollout status statefulset/synapse
 kubectl -n synapse logs -f synapse-0
 ```
 
-First start does two things before the server listens: it runs `synapse install`
-against the empty data directory to create the catalog and the admin user, then
-it starts the server. With `ml.models: none` that takes well under a minute.
+First start runs installation against the empty data directory to create the
+catalog and the admin user, applies the configured admin password, then starts
+the server. With the default `ml.enabled: false` that takes about 20 seconds.
+
+With `ml.enabled: true` the first start also builds a ~4GB Python environment,
+which measured at roughly 8 minutes on a 4-vCPU node with no model downloads and
+is documented by the image as taking 15-30 minutes. Later starts reuse the
+persisted environment and are fast again.
 
 ### Verify
 
@@ -84,7 +89,7 @@ A GQL console inside the pod:
 
 ```bash
 kubectl -n synapse exec -it synapse-0 -- \
-  synapse gql --grpc --address 127.0.0.1 --port 50051
+  synapse gql --host 127.0.0.1 --port 50051 --user admin
 ```
 
 ```gql
@@ -112,10 +117,10 @@ docker push registry.internal/synapse:0.1.0
 helm install synapse ./synapse-0.1.0.tgz -n synapse -f examples/07-air-gapped.yaml
 ```
 
-Set `ml.models: none`. Left at `all`, the container tries to reach the public
-model hub on first start; with no egress that attempt hangs until the startup
-probe expires, and the pod crash-loops with an error that does not obviously
-point at networking.
+Keep `ml.enabled: false`, which is the default. With it on, first start tries to
+reach a public package index and the model hub; with no egress that attempt
+stalls until the startup probe expires, and the pod crash-loops with an error
+that does not obviously point at networking.
 
 ## Upgrade
 
@@ -141,10 +146,12 @@ Two things that are **not** changeable by upgrade:
     -p '{"spec":{"resources":{"requests":{"storage":"1Ti"}}}}'
   ```
 
-- **Bootstrap credentials.** `auth.username` and `auth.password` are consumed
-  only when the data directory is empty. Changing them later updates the Secret
-  and changes nothing about who can log in; rotate the password with a GQL
-  statement instead.
+- **`auth.username`.** The server always bootstraps its admin account under a
+  fixed name; this value is only used for client connections.
+
+  `auth.password` *is* re-applied on every start while
+  `auth.enforcePassword` is on, so changing it and upgrading does rotate the
+  password. See [security.md](security.md#how-the-password-actually-gets-set).
 
 ### Changing the chart version
 

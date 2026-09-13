@@ -47,17 +47,39 @@ replicaCount: 1
 # Authentication
 # -----------------------------------------------------------------------------
 auth:
-  # Bootstrap admin username. Applied only on first start, when the data
-  # directory is empty.
+  # Admin username. The server always bootstraps its admin account as
+  # "admin"; this is used for the CLI and client connections.
   username: admin
-  # Bootstrap admin password. Required unless existingSecret is set.
+
+  # Admin password. Required unless existingSecret is set.
   password: ""
+
   # Use a pre-existing Secret instead of having the chart create one.
   existingSecret: ""
+
   # Keys to read from existingSecret.
   secretKeys:
     username: SYNAPSE_USER
     password: SYNAPSE_PASSWORD
+
+  # Apply auth.password to the admin account on every start.
+  #
+  # This is on by default because the alternative is a database that
+  # silently runs with a well-known password. The server seeds its admin
+  # account with a hardcoded default during first-start bootstrap and does
+  # not read the password from the install step, so without this the
+  # password you set here would never take effect - the deployment would
+  # come up on the built-in default and you would have no indication of it.
+  #
+  # The mechanism is the server's own admin-password reset, applied at
+  # start-up. Because it runs on every start, the values file stays the
+  # source of truth: a password changed out of band with ALTER USER is
+  # reverted the next time the pod restarts.
+  #
+  # Set this to false if you intend to manage the admin password through
+  # GQL instead. Do that only after the first password change has landed,
+  # or the deployment stays on the built-in default.
+  enforcePassword: true
 
 # -----------------------------------------------------------------------------
 # Tier and licensing
@@ -130,30 +152,56 @@ dataDir: /synapse-data
 # -----------------------------------------------------------------------------
 # AI / ML environment
 # -----------------------------------------------------------------------------
+#
+# Read this before tuning anything here, because the shape is not obvious.
+#
+# The image's entrypoint builds a ~4GB Python environment on first run -
+# 15-30 minutes, and it needs egress to the package index. That happens
+# regardless of which models you ask for, because the server binary links
+# against libpython via PyO3.
+#
+# The server does NOT require it. A missing environment is a warning at
+# start-up, not an error: graph traversal, vector search over embeddings you
+# supply, full-text search and the whole GQL surface work without it. Only
+# the in-database AI features (register/load/infer a model, compute
+# embeddings, extraction) need it.
+#
+# So `enabled` defaults to false: the chart starts the server directly and a
+# pod is ready in well under a minute instead of half an hour. Turn it on
+# when you actually want Synapse computing embeddings itself.
 ml:
-  # Which models to download on first start:
-  #   none - skip all downloads. Fastest start; graph, vector and text
-  #          search all work. Only the built-in embedding and extraction
-  #          models are unavailable.
-  #   all  - download everything. Adds 15-30 minutes to first start and
-  #          needs egress to the model hub.
-  #   or a comma-separated subset, for example "qwen,spacy".
+  # Build and use the Python/AI runtime.
   #
-  # Defaults to none because a pod that spends half an hour downloading
-  # models before it reports ready is a bad default in Kubernetes. Set it
-  # to all (plus ml.persistence) when you need the embedding pipeline.
+  # false - bypass the environment build. Pod ready in ~30 seconds. AI
+  #         features are disabled and the server says so at start-up.
+  # true  - run the image's full first-start path. Budget 15-30 minutes for
+  #         the first start, keep ml.persistence.mlEnv on so restarts do not
+  #         repeat it, and raise probes.startup.failureThreshold to match
+  #         (the chart refuses to render if that budget is too small).
+  enabled: false
+
+  # Models downloaded on top of the environment. Ignored when enabled=false.
+  #   none - environment only, no model downloads
+  #   all  - every bundled model
+  #   or a comma-separated subset, for example "qwen,spacy"
   models: none
 
-  # Persist the Python environment created on first start. Without this,
-  # every pod restart rebuilds it.
   persistence:
+    # The Python environment. Measured at ~4GB with models: none.
+    # Only mounted when ml.enabled is true.
+    #
+    # Leaving this off means every pod restart repeats the full build, so a
+    # rescheduled pod is unavailable for half an hour. Only reasonable for a
+    # throwaway cluster.
     mlEnv:
-      enabled: false
-      size: 20Gi
+      enabled: true
+      size: 10Gi
       storageClass: ""
       accessModes:
         - ReadWriteOnce
       annotations: {}
+    # The model cache. Only mounted when ml.enabled is true, and only worth
+    # enabling when ml.models is not "none".
     models:
       enabled: false
       size: 30Gi
@@ -190,8 +238,17 @@ externalAuth:
 # Multi-node cluster (Raft)
 # -----------------------------------------------------------------------------
 cluster:
-  # Turn on Raft replication across replicaCount pods. Requires
-  # persistence.data.enabled and an odd replicaCount of 3 or more.
+  # Turn on Raft replication across replicaCount pods.
+  #
+  # REQUIRES AN IMAGE BUILT WITH THE "cluster" CARGO FEATURE. That feature
+  # is not on by default, and a server without it does not reject a
+  # multi-node configuration - it ignores the peer list and starts as a
+  # single node. Every pod does the same, so you end up with replicaCount
+  # independent databases behind one Service, diverging from the first
+  # write. The chart checks the binary at start-up and refuses to run
+  # rather than let that happen, but the image is still yours to supply.
+  #
+  # Also requires persistence.data.enabled and an odd replicaCount of 3+.
   enabled: false
 
   # Port each pod binds its Raft RPC service on.
@@ -297,8 +354,15 @@ probes:
     initialDelaySeconds: 10
     periodSeconds: 10
     timeoutSeconds: 5
-    # 60 x 10s = 10 minutes. Raise this when ml.models is not none: a
-    # first start that downloads models can take 15-30 minutes.
+    # 60 x 10s = 10 minutes, which suits the default ml.enabled=false path
+    # (ready in well under a minute) while leaving room for index rebuild
+    # on a large graph.
+    #
+    # With ml.enabled=true the first start builds a ~4GB Python environment
+    # before the server listens. A startup probe that expires partway
+    # through kills the container mid-build, producing a crash loop that
+    # looks like a broken image. The chart refuses to render if the budget
+    # is under 30 minutes in that mode - raise this to at least 240.
     failureThreshold: 60
   liveness:
     enabled: true

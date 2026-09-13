@@ -163,4 +163,16 @@ Probes, the ServiceMonitor, the Ingress and the UI all depend on it.
 {{- if and .Values.tier.licenseKey .Values.tier.existingLicenseSecret -}}
 {{- fail "set either tier.licenseKey or tier.existingLicenseSecret, not both" -}}
 {{- end -}}
+{{/*
+With the AI runtime on, the first start builds a ~4GB Python environment
+before the server listens. A startup probe that expires partway through
+kills the container mid-build, and the resulting crash loop looks like a
+broken image rather than an impatient probe. Refuse rather than ship that.
+*/}}
+{{- if and .Values.ml.enabled .Values.probes.startup.enabled -}}
+{{- $budget := mul (int .Values.probes.startup.failureThreshold) (int .Values.probes.startup.periodSeconds) -}}
+{{- if lt $budget 1800 -}}
+{{- fail (printf "ml.enabled needs a startup probe budget of at least 1800s; probes.startup gives %ds (failureThreshold %v x periodSeconds %v). The first start builds a ~4GB Python environment, which takes 15-30 minutes. Raise probes.startup.failureThreshold to 240 or more." $budget .Values.probes.startup.failureThreshold .Values.probes.startup.periodSeconds) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

@@ -43,6 +43,17 @@ spec:
       ports:
         - port: http
           protocol: TCP
+    # The chart's own `helm test` pod. It runs in this namespace and would
+    # otherwise be blocked by allowedClients, turning a working deployment
+    # into a failing test.
+    - from:
+        - podSelector:
+            matchLabels:
+              synapse.deepgraph.ai/test-pod: "true"
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: http
+          protocol: TCP
     {{- end }}
     {{- if eq (include "synapse.clusterEnabled" .) "true" }}
     # Raft peering: only Synapse pods of this release talk to these ports.

@@ -80,8 +80,13 @@ check "existing secret" --set auth.existingSecret=s
 check "http disabled" --set auth.password=t --set server.http.enabled=false
 check "bolt enabled" --set auth.password=t --set server.bolt.enabled=true
 check "no persistence" --set auth.password=t --set persistence.data.enabled=false
-check "ml persistence" --set auth.password=t \
-    --set ml.persistence.mlEnv.enabled=true --set ml.persistence.models.enabled=true
+check "ml runtime on" --set auth.password=t --set ml.enabled=true \
+    --set ml.models=all --set ml.persistence.models.enabled=true \
+    --set probes.startup.failureThreshold=240
+check "ml runtime on, no persistence" --set auth.password=t --set ml.enabled=true \
+    --set ml.persistence.mlEnv.enabled=false --set probes.startup.failureThreshold=240
+check "cluster + ml runtime" --set auth.password=t --set cluster.enabled=true \
+    --set replicaCount=3 --set ml.enabled=true --set probes.startup.failureThreshold=300
 check "cluster 3" --set auth.password=t --set cluster.enabled=true --set replicaCount=3
 check "cluster 5 + tls" --set auth.password=t --set cluster.enabled=true \
     --set replicaCount=5 --set cluster.tls.enabled=true --set cluster.tls.existingSecret=tls
@@ -129,6 +134,8 @@ check_rejects "ingress without http" --set auth.password=t \
     --set server.http.enabled=false --set ingress.enabled=true
 check_rejects "two license sources" --set auth.password=t \
     --set tier.licenseKey=a --set tier.existingLicenseSecret=b
+check_rejects "ml runtime with too small a startup budget" --set auth.password=t \
+    --set ml.enabled=true --set probes.startup.failureThreshold=60
 
 echo
 echo "==> ${pass} passed, ${fail} failed"

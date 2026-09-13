@@ -1,0 +1,53 @@
+# Promtail: ships pod stdout to Loki.
+#
+#   helm install promtail grafana/promtail -n observability -f promtail.values.yaml
+
+config:
+  clients:
+    - url: http://loki.observability.svc.cluster.local:3100/loki/api/v1/push
+
+  snippets:
+    pipelineStages:
+      - cri: {}
+
+    # Promote a few Kubernetes labels to Loki stream labels. Keep this list
+    # short: every label combination is a separate stream, and high-cardinality
+    # labels (pod UID, container ID, trace ID) are what make Loki fall over.
+    extraRelabelConfigs:
+      - action: replace
+        sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        targetLabel: app
+      - action: replace
+        sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+        targetLabel: release
+      - action: replace
+        sourceLabels: [__meta_kubernetes_pod_node_name]
+        targetLabel: node
+
+    # Parse Synapse's JSON output into a level label so `| level="ERROR"`
+    # works in Grafana without a per-query parser. Applied only to Synapse
+    # pods; everything else is shipped as-is.
+    extraClientConfigs: {}
+
+# The Synapse-specific stage. Matching on the app label keeps the JSON parser
+# off unrelated workloads, where it would just fill the logs with parse errors.
+extraArgs:
+  - -config.expand-env=true
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+tolerations:
+  # Collect logs from control-plane nodes too.
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule

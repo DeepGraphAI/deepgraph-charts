@@ -1,0 +1,85 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "synapse.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "synapse.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if not .Values.networkPolicy.allowExternalEgress }}
+    - Egress
+    {{- end }}
+  ingress:
+    # Client protocols.
+    - from:
+        {{- if .Values.networkPolicy.allowedClients }}
+        {{- toYaml .Values.networkPolicy.allowedClients | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - port: grpc
+          protocol: TCP
+        {{- if .Values.server.http.enabled }}
+        - port: http
+          protocol: TCP
+        {{- end }}
+        {{- if .Values.server.bolt.enabled }}
+        - port: bolt
+          protocol: TCP
+        {{- end }}
+    {{- if .Values.server.http.enabled }}
+    # Metrics scraping stays open to the whole cluster even when client
+    # access is restricted, otherwise the Prometheus namespace has to be
+    # named here and monitoring silently breaks when it moves.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+    {{- if eq (include "synapse.clusterEnabled" .) "true" }}
+    # Raft peering: only Synapse pods of this release talk to these ports.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "synapse.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: raft
+          protocol: TCP
+        {{- if .Values.cluster.admin.enabled }}
+        - port: admin
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+  {{- if not .Values.networkPolicy.allowExternalEgress }}
+  egress:
+    # DNS, without which nothing resolves - including Raft peer FQDNs.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if eq (include "synapse.clusterEnabled" .) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "synapse.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.cluster.raftPort }}
+          protocol: TCP
+        {{- if .Values.cluster.admin.enabled }}
+        - port: {{ .Values.cluster.admin.port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

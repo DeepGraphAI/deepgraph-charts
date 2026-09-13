@@ -1,0 +1,90 @@
+# OpenTelemetry Collector: the single OTLP endpoint Synapse exports to.
+#
+#   helm install opentelemetry-collector open-telemetry/opentelemetry-collector \
+#     -n observability -f otel-collector.values.yaml
+#
+# Synapse could push straight to Tempo, but a collector in between means the
+# trace backend can be swapped, sampled or fanned out without touching the
+# database's configuration or restarting it.
+
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+presets:
+  kubernetesAttributes:
+    enabled: true
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  processors:
+    batch:
+      timeout: 5s
+      send_batch_size: 1024
+
+    # Bound the collector's own memory so a trace burst from a heavy
+    # ingestion run cannot OOM it and take the pipeline down.
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 80
+      spike_limit_percentage: 20
+
+    resource:
+      attributes:
+        - key: deployment.environment
+          value: production
+          action: upsert
+
+  exporters:
+    otlp/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlp/tempo]
+
+ports:
+  otlp:
+    enabled: true
+    containerPort: 4317
+    servicePort: 4317
+    protocol: TCP
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+serviceMonitor:
+  enabled: true
+  extraLabels:
+    release: kube-prometheus-stack

@@ -1,0 +1,68 @@
+# Local development (kind, minikube, k3d, Docker Desktop)
+# -------------------------------------------------------
+# Sized to fit on a laptop. Storage is ephemeral, resources are small, and
+# debug endpoints are on.
+#
+#   kind create cluster --name synapse
+#   kind load docker-image synapse:latest --name synapse
+#   helm install synapse ./charts/synapse -f examples/10-local-dev.yaml
+#
+#   kubectl port-forward svc/synapse 50051:50051 8080:8080
+#   open http://localhost:8080
+#
+# Do not copy this file into a real environment: it keeps no data across a
+# restart and publishes internals on an unauthenticated port.
+
+image:
+  repository: synapse
+  tag: latest
+  # The image is side-loaded into the node, so never try to pull it.
+  pullPolicy: Never
+
+auth:
+  username: admin
+  password: "devpassword"
+
+replicaCount: 1
+
+persistence:
+  data:
+    # emptyDir. Every pod restart starts from an empty graph, which is often
+    # what you want while iterating on schema.
+    enabled: false
+
+ml:
+  models: none
+
+server:
+  logLevel: debug
+  # Human-readable output, since you are reading it in a terminal rather
+  # than querying it in Loki.
+  logFormat: text
+  http:
+    enabled: true
+    # /debug/memory, /debug/queries, /debug/indexes, /debug/state.
+    debugEndpoints: true
+    corsOrigins:
+      # Lets a UI dev server on the host call this API directly.
+      - http://localhost:3000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+probes:
+  startup:
+    failureThreshold: 30
+    periodSeconds: 5
+
+# One node, so anti-affinity would only make the pod unschedulable.
+podAntiAffinity:
+  enabled: false
+
+# Fast teardown while iterating.
+terminationGracePeriodSeconds: 10

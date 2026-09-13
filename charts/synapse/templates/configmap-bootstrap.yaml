@@ -1,0 +1,117 @@
+{{- if eq (include "synapse.clusterEnabled" .) "true" }}
+{{- $fullname := include "synapse.fullname" . }}
+{{- $headless := include "synapse.headlessServiceName" . }}
+{{- $replicas := int .Values.replicaCount }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  bootstrap.sh: |
+    #!/usr/bin/env bash
+    #
+    # Per-pod cluster bootstrap.
+    #
+    # The server reads one synapse.toml, and in a StatefulSet every pod needs
+    # a different [cluster] section: its own node_id and its own bind address.
+    # A ConfigMap is identical across pods, so the per-pod part is generated
+    # here at start-up, appended to the mounted base config, and written to a
+    # writable path that SYNAPSE_CONFIG points at.
+    set -euo pipefail
+
+    ORDINAL="${HOSTNAME##*-}"
+    NODE_ID=$((ORDINAL + 1))
+    BASE_CONFIG="/etc/synapse/synapse.toml"
+    EFFECTIVE_CONFIG="{{ include "synapse.configPath" . }}"
+
+    mkdir -p "$(dirname "${EFFECTIVE_CONFIG}")"
+    cp "${BASE_CONFIG}" "${EFFECTIVE_CONFIG}"
+
+    {
+      echo ""
+      echo "# ---- generated per-pod cluster section ----"
+      echo "[cluster]"
+      echo "node_id = ${NODE_ID}"
+      # The bind address must parse as IP:port, so it is the pod IP rather
+      # than the pod DNS name. The peer list below then re-states this node
+      # with its stable FQDN, which is what lands in Raft membership - a pod
+      # IP would go stale the first time the pod is rescheduled.
+      echo "listen = \"${POD_IP}:{{ .Values.cluster.raftPort }}\""
+      echo "rpc_timeout_ms = {{ .Values.cluster.rpcTimeoutMs }}"
+      {{- with .Values.cluster.snapshotLogsThreshold }}
+      echo "snapshot_logs_threshold = {{ . }}"
+      {{- end }}
+      {{- with .Values.cluster.maxInSnapshotLogToKeep }}
+      echo "max_in_snapshot_log_to_keep = {{ . }}"
+      {{- end }}
+      echo ""
+
+      {{- range $i := until $replicas }}
+      echo "[[cluster.peers]]"
+      echo "node_id = {{ add $i 1 }}"
+      echo "raft_addr = \"{{ $fullname }}-{{ $i }}.{{ $headless }}.{{ $.Release.Namespace }}.svc.{{ $.Values.clusterDomain }}:{{ $.Values.cluster.raftPort }}\""
+      echo "persistent_id = \"{{ $fullname }}-{{ $i }}\""
+      echo ""
+      {{- end }}
+
+      {{- if .Values.cluster.admin.enabled }}
+      echo "[cluster.admin]"
+      echo "listen = \"${POD_IP}:{{ .Values.cluster.admin.port }}\""
+      {{- if .Values.cluster.tls.enabled }}
+      echo ""
+      echo "[cluster.admin.tls]"
+      echo "ca_path = \"/etc/synapse-cluster-tls/ca.crt\""
+      echo "cert_path = \"/etc/synapse-cluster-tls/tls.crt\""
+      echo "key_path = \"/etc/synapse-cluster-tls/tls.key\""
+      {{- end }}
+      echo ""
+      {{- end }}
+
+      {{- if .Values.cluster.tls.enabled }}
+      echo "[cluster.tls]"
+      echo "ca_path = \"/etc/synapse-cluster-tls/ca.crt\""
+      echo "cert_path = \"/etc/synapse-cluster-tls/tls.crt\""
+      echo "key_path = \"/etc/synapse-cluster-tls/tls.key\""
+      echo ""
+      {{- end }}
+
+      {{- $raft := .Values.cluster.raft }}
+      {{- if or $raft.heartbeatIntervalMs $raft.electionTimeoutMinMs $raft.electionTimeoutMaxMs $raft.maxPayloadEntries }}
+      echo "[cluster.raft]"
+      {{- with $raft.heartbeatIntervalMs }}
+      echo "heartbeat_interval_ms = {{ . }}"
+      {{- end }}
+      {{- with $raft.electionTimeoutMinMs }}
+      echo "election_timeout_min_ms = {{ . }}"
+      {{- end }}
+      {{- with $raft.electionTimeoutMaxMs }}
+      echo "election_timeout_max_ms = {{ . }}"
+      {{- end }}
+      {{- with $raft.maxPayloadEntries }}
+      echo "max_payload_entries = {{ . }}"
+      {{- end }}
+      {{- end }}
+    } >> "${EFFECTIVE_CONFIG}"
+
+    # Exactly one node seeds the initial membership. Ordinal 0 is always
+    # created first by the StatefulSet, and the call is idempotent, so a
+    # restart of pod 0 on an already-initialized cluster is a no-op.
+    if [ "${ORDINAL}" = "0" ]; then
+      export SYNAPSE_INIT_CLUSTER=1
+    fi
+
+    # Operator-facing node identity, so logs and admin RPCs name the pod.
+    export SYNAPSE_NODE_ID="${HOSTNAME}"
+
+    echo "cluster bootstrap: node_id=${NODE_ID} ordinal=${ORDINAL} config=${EFFECTIVE_CONFIG}"
+    sed 's/^/  | /' "${EFFECTIVE_CONFIG}"
+
+    exec /docker-entrypoint.sh "$@"
+{{- end }}

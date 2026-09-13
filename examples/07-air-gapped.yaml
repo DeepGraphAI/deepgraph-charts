@@ -1,0 +1,100 @@
+# Air-gapped / no egress
+# ----------------------
+# For clusters with no route to the internet: a private registry, no model
+# downloads, and an egress policy that permits only DNS.
+#
+# Before installing, mirror the image:
+#
+#   docker pull ghcr.io/deepgraphai/synapse:0.1.0
+#   docker tag  ghcr.io/deepgraphai/synapse:0.1.0 registry.internal/synapse:0.1.0
+#   docker push registry.internal/synapse:0.1.0
+#
+#   helm install synapse ./synapse-0.1.0.tgz -n synapse -f examples/07-air-gapped.yaml
+#
+# The one thing to get right is ml.models. Left at "all", the container tries
+# to reach the public model hub on first start; with no egress that attempt
+# hangs until the startup probe gives up, and the pod crash-loops with an
+# error that looks unrelated to networking.
+
+image:
+  # Pin by digest rather than tag: in an environment where you cannot re-pull
+  # to check, the digest is the only thing that proves what is running.
+  repository: registry.internal/synapse
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - registry-internal-credentials
+
+auth:
+  existingSecret: synapse-admin
+
+tier:
+  level: enterprise
+  existingLicenseSecret: synapse-license
+
+ml:
+  # No downloads attempted. Graph traversal, vector search over embeddings
+  # you supply, and full-text search all work. What is unavailable is
+  # generating embeddings inside the database.
+  models: none
+
+server:
+  logFormat: json
+  http:
+    enabled: true
+    debugEndpoints: false
+
+persistence:
+  data:
+    enabled: true
+    size: 500Gi
+    storageClass: local-ssd
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 16Gi
+  limits:
+    cpu: "8"
+    memory: 32Gi
+
+networkPolicy:
+  enabled: true
+  allowedClients:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: applications
+  # Deny all egress except the DNS rule the chart adds. Nothing the database
+  # does in this configuration needs to reach outside the cluster.
+  allowExternalEgress: false
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 0
+
+# No OTLP export either - it would be an egress attempt that cannot succeed.
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  otel:
+    enabled: false

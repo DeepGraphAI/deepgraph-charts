@@ -1,0 +1,134 @@
+# Service mesh (Istio)
+# --------------------
+# Runs Synapse inside an Istio mesh: sidecar-terminated mTLS between every
+# client and the database, a gateway for traffic arriving from outside, and
+# per-route timeout and retry policy.
+#
+# Prerequisites:
+#   istioctl install --set profile=default
+#   kubectl label namespace synapse istio-injection=enabled
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/05-service-mesh.yaml
+#
+# What the mesh buys you here: the gRPC and BOLT ports carry credentials and
+# query text, and neither protocol is encrypted by Synapse itself. STRICT
+# PeerAuthentication means the sidecar refuses any plaintext connection, so
+# the wire is protected without configuring TLS in the database.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  existingSecret: synapse-admin
+
+replicaCount: 1
+
+persistence:
+  data:
+    size: 200Gi
+
+server:
+  logFormat: json
+  http:
+    enabled: true
+    debugEndpoints: false
+  bolt:
+    enabled: true
+    port: 7687
+    # Drivers reconnect to whatever address the server advertises. Behind a
+    # gateway that must be the external name, not the pod's.
+    advertisedAddress: "synapse.example.com:7687"
+
+serviceMesh:
+  istio:
+    enabled: true
+    # Prefer labelling the namespace. This annotation is here for the case
+    # where the namespace is shared and only Synapse should be meshed.
+    injectSidecar: true
+
+    peerAuthentication:
+      enabled: true
+      # Start at PERMISSIVE if clients are still being migrated into the
+      # mesh, confirm from telemetry that nothing is still plaintext, then
+      # move to STRICT. Going straight to STRICT drops unmeshed clients.
+      mode: STRICT
+
+    gateway:
+      enabled: true
+      selector:
+        istio: ingressgateway
+      hosts:
+        - synapse.example.com
+      tls:
+        enabled: true
+        mode: SIMPLE
+        # A Secret of type kubernetes.io/tls in the istio-system namespace.
+        credentialName: synapse-gateway-cert
+      # gRPC is declared as its own HTTP/2 server block so streaming
+      # responses are not buffered by the proxy.
+      exposeGrpc: true
+
+    virtualService:
+      enabled: true
+      hosts:
+        - synapse.example.com
+      # Long enough for ingestion calls; the interactive query path finishes
+      # far inside this.
+      timeout: 120s
+      retries:
+        # Retries apply to connection-level failures only. A query that
+        # reached the server and failed there is not retried, because a
+        # write that partially applied must not be replayed by a proxy.
+        attempts: 2
+        perTryTimeout: 60s
+
+    destinationRule:
+      enabled: true
+      connectionPool:
+        tcp:
+          maxConnections: 200
+        http:
+          # Required for gRPC through the mesh.
+          h2UpgradePolicy: UPGRADE
+          http2MaxRequests: 200
+          # 0 means unlimited. Recycling gRPC connections mid-stream breaks
+          # long-running queries.
+          maxRequestsPerConnection: 0
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+# The mesh already encrypts pod-to-pod traffic, but a NetworkPolicy still
+# controls who may open a connection in the first place. The two are
+# complementary: mTLS answers "is this really who they claim", a
+# NetworkPolicy answers "are they allowed to talk to me at all".
+networkPolicy:
+  enabled: true
+  allowedClients:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: applications
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: istio-system
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+  limits:
+    cpu: "4"
+    memory: 16Gi
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  # Istio reports its own request metrics; these are Synapse's internal view
+  # and the two are worth having side by side when latency is disputed.
+  grafanaDashboard:
+    enabled: true

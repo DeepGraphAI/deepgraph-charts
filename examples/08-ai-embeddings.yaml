@@ -1,0 +1,94 @@
+# AI features: in-database embeddings and extraction
+# --------------------------------------------------
+# Turns on the model-backed features - generating embeddings inside the
+# database, text extraction, and the conversational API - by letting the
+# first start build the Python environment and download models.
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/08-ai-embeddings.yaml
+#
+# Read this before you install: the first start takes 15-30 minutes and
+# needs egress to the model hub. That work is what the two extra volumes
+# below preserve - without them every pod restart repeats it.
+#
+# If you only need vector search over embeddings your application computes
+# elsewhere, you do not need any of this. Use example 02 instead.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  existingSecret: synapse-admin
+
+tier:
+  level: enterprise
+  existingLicenseSecret: synapse-license
+
+ml:
+  # "all" pulls every bundled model. A comma-separated subset is usually
+  # better: name only what you actually call, e.g. "qwen,spacy".
+  models: all
+
+  persistence:
+    # The Python environment built on first start. ~10-15Gi.
+    mlEnv:
+      enabled: true
+      size: 20Gi
+      storageClass: gp3
+    # The model cache. Size this to the models you selected; "all" needs
+    # noticeably more than a subset.
+    models:
+      enabled: true
+      size: 60Gi
+      storageClass: gp3
+
+server:
+  logFormat: json
+  http:
+    enabled: true
+    debugEndpoints: false
+    # Model inference over REST is slower than a graph query.
+    timeoutSeconds: 300
+    agentTimeoutSeconds: 600
+
+persistence:
+  data:
+    size: 500Gi
+    storageClass: gp3
+
+probes:
+  startup:
+    # 60 minutes. The environment build and model download both happen
+    # before the server listens, and a startup probe that expires partway
+    # through leaves you with a crash loop and a half-populated cache.
+    failureThreshold: 360
+    periodSeconds: 10
+
+# Model loading and inference are memory-hungry on top of the graph itself.
+resources:
+  requests:
+    cpu: "8"
+    memory: 32Gi
+  limits:
+    cpu: "16"
+    memory: 64Gi
+
+    # GPU inference: uncomment, and add the matching nodeSelector below.
+    # nvidia.com/gpu: 1
+
+# nodeSelector:
+#   nvidia.com/gpu.present: "true"
+# tolerations:
+#   - key: nvidia.com/gpu
+#     operator: Exists
+#     effect: NoSchedule
+
+terminationGracePeriodSeconds: 300
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  grafanaDashboard:
+    enabled: true

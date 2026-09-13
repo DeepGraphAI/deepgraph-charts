@@ -1,0 +1,40 @@
+{{- if .Values.server.http.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "synapse.fullname" . }}-test-connection
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: curlimages/curl:8.11.1
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          BASE="http://{{ include "synapse.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ .Values.server.http.port }}"
+
+          echo "==> GET ${BASE}/health"
+          curl -fsS --max-time 10 "${BASE}/health"
+          echo
+
+          echo "==> GET ${BASE}/health/ready"
+          # Readiness returns 503 with a JSON body listing which component is
+          # not up, so the body is worth printing even when the check fails.
+          curl -fsS --max-time 10 "${BASE}/health/ready"
+          echo
+
+          echo "==> GET ${BASE}/metrics"
+          # Confirms the metrics registry is initialized, not just that the
+          # route exists: an uninitialized registry answers 503 here.
+          curl -fsS --max-time 10 "${BASE}/metrics" | head -n 5
+
+          echo "==> all checks passed"
+{{- end }}

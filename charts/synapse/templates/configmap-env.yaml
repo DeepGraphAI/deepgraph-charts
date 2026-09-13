@@ -1,0 +1,73 @@
+{{- include "synapse.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synapse.fullname" . }}-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  # -- Core runtime -----------------------------------------------------------
+  SYNAPSE_DATA_DIR: {{ .Values.dataDir | quote }}
+  SYNAPSE_CONFIG: {{ include "synapse.configPath" . | quote }}
+  SYNAPSE_TIER: {{ .Values.tier.level | quote }}
+  SERVER_ADDRESS: "0.0.0.0"
+  SERVER_PORT: {{ .Values.server.grpc.port | quote }}
+  RUST_LOG: {{ .Values.server.logLevel | quote }}
+  SYNAPSE_LOG_FORMAT: {{ .Values.server.logFormat | quote }}
+
+  # -- AI/ML environment ------------------------------------------------------
+  SYNAPSE_MODELS: {{ .Values.ml.models | quote }}
+  HF_HOME: "/app/models"
+
+  {{- if .Values.server.http.enabled }}
+  # -- HTTP listener ----------------------------------------------------------
+  # The port itself is passed as a CLI flag: it is the one HTTP setting the
+  # server takes from argv rather than the environment.
+  SYNAPSE_HTTP_ADDRESS: "0.0.0.0"
+  SYNAPSE_HTTP_TIMEOUT_SECS: {{ .Values.server.http.timeoutSeconds | quote }}
+  SYNAPSE_HTTP_AGENT_TIMEOUT_SECS: {{ .Values.server.http.agentTimeoutSeconds | quote }}
+  SYNAPSE_HTTP_MAX_CONNECTIONS: {{ .Values.server.http.maxConnections | quote }}
+  {{- with .Values.server.http.corsOrigins }}
+  SYNAPSE_CORS_ORIGINS: {{ join "," . | quote }}
+  {{- end }}
+  {{- end }}
+
+  {{- if .Values.server.bolt.enabled }}
+  # -- BOLT listener ----------------------------------------------------------
+  SYNAPSE_BOLT_ENABLED: "true"
+  SYNAPSE_BOLT_ADDRESS: "0.0.0.0"
+  SYNAPSE_BOLT_PORT: {{ .Values.server.bolt.port | quote }}
+  SYNAPSE_BOLT_LANGUAGES: {{ .Values.server.bolt.languages | quote }}
+  SYNAPSE_BOLT_MAX_CONNECTIONS: {{ .Values.server.bolt.maxConnections | quote }}
+  SYNAPSE_BOLT_IDLE_TIMEOUT: {{ .Values.server.bolt.idleTimeoutSeconds | quote }}
+  {{- with .Values.server.bolt.advertisedAddress }}
+  SYNAPSE_BOLT_ADVERTISED_ADDRESS: {{ . | quote }}
+  {{- end }}
+  {{- else }}
+  SYNAPSE_BOLT_ENABLED: "false"
+  {{- end }}
+
+  {{- if .Values.observability.otel.enabled }}
+  # -- OpenTelemetry ----------------------------------------------------------
+  SYNAPSE_OTEL_ENABLED: "true"
+  SYNAPSE_OTEL_ENDPOINT: {{ .Values.observability.otel.endpoint | quote }}
+  SYNAPSE_OTEL_PROTOCOL: {{ .Values.observability.otel.protocol | quote }}
+  SYNAPSE_OTEL_SERVICE_NAME: {{ default (include "synapse.fullname" .) .Values.observability.otel.serviceName | quote }}
+  SYNAPSE_OTEL_SAMPLE_RATE: {{ .Values.observability.otel.sampleRate | quote }}
+  SYNAPSE_OTEL_EXPORT_TIMEOUT_SECS: {{ .Values.observability.otel.exportTimeoutSeconds | quote }}
+  SYNAPSE_ENVIRONMENT: {{ .Values.observability.otel.environment | quote }}
+  {{- end }}
+
+  {{- if .Values.externalAuth.enabled }}
+  SYNAPSE_EXTERNAL_AUTH_CONFIG: "/etc/synapse-auth/external-auth.toml"
+  {{- end }}
+
+  # -- Native library path ----------------------------------------------------
+  LD_LIBRARY_PATH: "/app/lib:/usr/local/lib:/usr/lib"
+  LIBTORCH_USE_PYTORCH: "1"
+  LIBTORCH_BYPASS_VERSION_CHECK: "1"

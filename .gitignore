@@ -1,0 +1,12 @@
+*.tgz
+charts/*/charts/
+charts/*/Chart.lock
+.DS_Store
+*.swp
+*.bak
+*.orig
+*~
+.idea/
+.vscode/
+/tmp/
+rendered/

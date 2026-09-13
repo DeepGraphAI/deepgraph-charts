@@ -1,0 +1,99 @@
+{{ include "synapse.fullname" . }} has been deployed.
+
+  Chart:     {{ .Chart.Name }}-{{ .Chart.Version }}
+  Image:     {{ include "synapse.image" . }}
+  Namespace: {{ .Release.Namespace }}
+  Replicas:  {{ .Values.replicaCount }}{{ if eq (include "synapse.clusterEnabled" .) "true" }} (Raft cluster){{ else }} (single node){{ end }}
+  Tier:      {{ .Values.tier.level }}
+
+1. Watch the pods come up:
+
+   kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "synapse.fullname" . }}
+
+{{- if ne .Values.ml.models "none" }}
+
+   NOTE: ml.models is "{{ .Values.ml.models }}", so the first start downloads models
+   before the server is ready. This can take 15-30 minutes. The startup probe
+   allows {{ mul .Values.probes.startup.failureThreshold .Values.probes.startup.periodSeconds }}s; raise probes.startup.failureThreshold if that is not enough.
+{{- end }}
+
+2. Reach the database:
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "synapse.fullname" . }} {{ .Values.server.grpc.port }}:{{ .Values.server.grpc.port }}{{ if .Values.server.http.enabled }} {{ .Values.server.http.port }}:{{ .Values.server.http.port }}{{ end }}
+
+   gRPC API:  localhost:{{ .Values.server.grpc.port }}
+{{- if .Values.server.http.enabled }}
+   UI + REST: http://localhost:{{ .Values.server.http.port }}
+   Health:    http://localhost:{{ .Values.server.http.port }}/health
+   Metrics:   http://localhost:{{ .Values.server.http.port }}/metrics
+{{- end }}
+{{- if .Values.server.bolt.enabled }}
+   BOLT:      bolt://localhost:{{ .Values.server.bolt.port }}
+{{- end }}
+
+3. Open a GQL console inside the cluster:
+
+   kubectl -n {{ .Release.Namespace }} exec -it {{ include "synapse.fullname" . }}-0 -- \
+     synapse gql --grpc --address 127.0.0.1 --port {{ .Values.server.grpc.port }}
+
+4. Retrieve the admin credentials:
+
+{{- if .Values.auth.existingSecret }}
+   kubectl -n {{ .Release.Namespace }} get secret {{ .Values.auth.existingSecret }} \
+     -o jsonpath='{.data.{{ .Values.auth.secretKeys.password }}}' | base64 -d
+{{- else }}
+   kubectl -n {{ .Release.Namespace }} get secret {{ include "synapse.fullname" . }}-credentials \
+     -o jsonpath='{.data.SYNAPSE_PASSWORD}' | base64 -d
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+5. The UI and REST API are published at:
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- end }}
+
+{{- if eq (include "synapse.clusterEnabled" .) "true" }}
+
+Cluster status:
+
+   kubectl -n {{ .Release.Namespace }} exec -it {{ include "synapse.fullname" . }}-0 -- \
+     synapsectl cluster status
+
+   Pod {{ include "synapse.fullname" . }}-0 seeds the initial membership. It must
+   become ready before the other pods can join, which is why the StatefulSet
+   starts them in order.
+{{- end }}
+
+{{- if and .Values.cluster.enabled (not .Values.cluster.tls.enabled) }}
+
+WARNING: cluster.tls is disabled. Replicated writes cross the Raft port in
+         plaintext. Either set cluster.tls.enabled with a CA-signed keypair,
+         or confine the traffic with a service mesh in STRICT mTLS mode.
+{{- end }}
+
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.cluster.enabled) }}
+
+WARNING: replicaCount is {{ .Values.replicaCount }} but cluster.enabled is false. Synapse replicates
+         through Raft, not through shared storage, so these pods are {{ .Values.replicaCount }}
+         independent databases behind one Service and a client will get a
+         different dataset depending on which pod it lands on. Set
+         cluster.enabled=true, or scale back to one replica.
+{{- end }}
+
+{{- if not .Values.persistence.data.enabled }}
+
+WARNING: persistence.data is disabled, so the database lives in an emptyDir
+         and every pod restart starts from an empty graph. This is fine for a
+         demo and wrong for anything else.
+{{- end }}
+
+{{- if and .Values.server.http.enabled .Values.server.http.debugEndpoints }}
+
+WARNING: server.http.debugEndpoints is on, which exposes /debug/* (memory
+         maps, in-flight queries, index internals) to anyone who can reach
+         the HTTP port. Turn it off outside of debugging.
+{{- end }}
+
+Documentation lives in the docs/ directory of this chart's repository.

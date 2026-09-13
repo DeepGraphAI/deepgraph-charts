@@ -1,0 +1,156 @@
+{{- if .Values.observability.prometheusRule.enabled }}
+{{- $rules := .Values.observability.prometheusRule.rules }}
+{{- $sel := printf "job=\"%s\", namespace=\"%s\"" (include "synapse.fullname" .) .Release.Namespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "synapse.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.observability.prometheusRule.namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+    {{- with .Values.observability.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: {{ include "synapse.fullname" . }}
+      rules:
+        {{- if $rules.instanceDown.enabled }}
+        # up == 0 means the scrape itself failed, so this fires for a crashed
+        # pod, a wedged HTTP listener, or a pod that never became ready.
+        - alert: SynapseInstanceDown
+          expr: up{ {{- $sel }} } == 0
+          for: {{ $rules.instanceDown.for }}
+          labels:
+            severity: {{ $rules.instanceDown.severity }}
+          annotations:
+            summary: "Synapse instance {{ "{{ $labels.instance }}" }} is not responding"
+            description: >-
+              Prometheus cannot scrape {{ "{{ $labels.instance }}" }} in namespace
+              {{ "{{ $labels.namespace }}" }}. The pod is down, or its HTTP listener
+              has stopped serving.
+        {{- end }}
+
+        {{- if $rules.queryLatency.enabled }}
+        - alert: SynapseHighQueryLatency
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le, namespace, pod) (
+                rate(synapse_query_latency_seconds_bucket{ {{- $sel }} }[5m])
+              )
+            ) > {{ $rules.queryLatency.threshold }}
+          for: {{ $rules.queryLatency.for }}
+          labels:
+            severity: {{ $rules.queryLatency.severity }}
+          annotations:
+            summary: "Synapse p95 query latency above {{ $rules.queryLatency.threshold }}s"
+            description: >-
+              95th percentile query latency on {{ "{{ $labels.pod }}" }} is
+              {{ "{{ $value | printf \"%.2f\" }}" }}s. Check for unbounded traversals,
+              a cold cache after a restart, or vector index rebuild pressure.
+        {{- end }}
+
+        {{- if $rules.errorRate.enabled }}
+        # The ratio is only meaningful when queries are actually flowing, so
+        # the denominator guards against a divide-by-zero alert storm on an
+        # idle instance.
+        - alert: SynapseHighErrorRate
+          expr: >-
+            (
+              sum by (namespace, pod) (rate(synapse_query_total{ {{- $sel }}, status="error"}[5m]))
+              /
+              sum by (namespace, pod) (rate(synapse_query_total{ {{- $sel }} }[5m]))
+            ) > {{ $rules.errorRate.threshold }}
+            and
+            sum by (namespace, pod) (rate(synapse_query_total{ {{- $sel }} }[5m])) > 0
+          for: {{ $rules.errorRate.for }}
+          labels:
+            severity: {{ $rules.errorRate.severity }}
+          annotations:
+            summary: "Synapse query error rate above {{ $rules.errorRate.threshold }}"
+            description: >-
+              {{ "{{ $value | humanizePercentage }}" }} of queries on
+              {{ "{{ $labels.pod }}" }} are failing.
+        {{- end }}
+
+        {{- if $rules.memoryUsage.enabled }}
+        # Measured against the container limit rather than an absolute byte
+        # count, so the alert stays correct when resources are resized.
+        - alert: SynapseHighMemoryUsage
+          expr: >-
+            (
+              synapse_memory_rss_bytes{ {{- $sel }} }
+              /
+              on (namespace, pod) group_left
+              sum by (namespace, pod) (
+                kube_pod_container_resource_limits{namespace="{{ .Release.Namespace }}", resource="memory", container="synapse"}
+              )
+            ) > {{ $rules.memoryUsage.threshold }}
+          for: {{ $rules.memoryUsage.for }}
+          labels:
+            severity: {{ $rules.memoryUsage.severity }}
+          annotations:
+            summary: "Synapse memory above {{ $rules.memoryUsage.threshold }} of its limit"
+            description: >-
+              {{ "{{ $labels.pod }}" }} is at {{ "{{ $value | humanizePercentage }}" }} of its
+              memory limit. An OOM kill forces a full vector and text index
+              rebuild on restart.
+        {{- end }}
+
+        {{- if $rules.searchLatency.enabled }}
+        - alert: SynapseSlowHybridSearch
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le, namespace, pod) (
+                rate(synapse_hybrid_search_latency_seconds_bucket{ {{- $sel }} }[5m])
+              )
+            ) > {{ $rules.searchLatency.threshold }}
+          for: {{ $rules.searchLatency.for }}
+          labels:
+            severity: {{ $rules.searchLatency.severity }}
+          annotations:
+            summary: "Synapse p95 hybrid search latency above {{ $rules.searchLatency.threshold }}s"
+            description: >-
+              Hybrid search on {{ "{{ $labels.pod }}" }} is at
+              {{ "{{ $value | printf \"%.3f\" }}" }}s at p95. Check HNSW parameters and
+              whether the vector index still fits in memory.
+        {{- end }}
+
+        {{- if .Values.cluster.enabled }}
+        {{- if $rules.raftApplyLag.enabled }}
+        # A follower that trails the leader keeps serving stale reads, so this
+        # is a correctness signal, not just a performance one.
+        - alert: SynapseRaftApplyLag
+          expr: synapse_raft_apply_lag_seconds{ {{- $sel }} } > {{ $rules.raftApplyLag.threshold }}
+          for: {{ $rules.raftApplyLag.for }}
+          labels:
+            severity: {{ $rules.raftApplyLag.severity }}
+          annotations:
+            summary: "Synapse follower {{ "{{ $labels.pod }}" }} is behind the leader"
+            description: >-
+              Apply lag is {{ "{{ $value | printf \"%.0f\" }}" }}s. Follower reads from this
+              node are stale by at least that much.
+        {{- end }}
+
+        {{- if $rules.raftApplyErrors.enabled }}
+        - alert: SynapseRaftApplyErrors
+          expr: sum by (namespace, pod, variant) (rate(synapse_raft_apply_errors_total{ {{- $sel }} }[5m])) > 0
+          for: {{ $rules.raftApplyErrors.for }}
+          labels:
+            severity: {{ $rules.raftApplyErrors.severity }}
+          annotations:
+            summary: "Synapse Raft apply errors on {{ "{{ $labels.pod }}" }}"
+            description: >-
+              Apply errors of type {{ "{{ $labels.variant }}" }} are occurring. The write
+              path may be stalled on this replica.
+        {{- end }}
+        {{- end }}
+
+        {{- with .Values.observability.prometheusRule.extraRules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

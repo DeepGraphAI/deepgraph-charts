@@ -1,0 +1,419 @@
+{{- $clustered := eq (include "synapse.clusterEnabled" .) "true" }}
+{{- $probeScheme := "HTTP" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "synapse.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ include "synapse.headlessServiceName" . }}
+  replicas: {{ .Values.replicaCount }}
+  # Ordinal 0 seeds cluster membership and must be ready before ordinal 1
+  # starts, so pods are always created in order.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: {{ .Values.updateStrategy.type }}
+    {{- with .Values.updateStrategy.rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "synapse.selectorLabels" . | nindent 6 }}
+  {{- if .Values.persistence.data.enabled }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ .Values.persistence.data.retentionPolicy.whenDeleted }}
+    whenScaled: {{ .Values.persistence.data.retentionPolicy.whenScaled }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "synapse.podLabels" . | nindent 8 }}
+      annotations:
+        # Roll pods when the rendered configuration changes. Without this a
+        # ConfigMap edit is silently ignored until something else restarts
+        # the pod.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-env.yaml") . | sha256sum }}
+        {{- if not .Values.config.existingConfigMap }}
+        checksum/toml: {{ include (print $.Template.BasePath "/configmap-toml.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if $clustered }}
+        checksum/bootstrap: {{ include (print $.Template.BasePath "/configmap-bootstrap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.observability.podAnnotations.enabled }}
+        {{- if .Values.server.http.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.server.http.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- end }}
+        {{- if and .Values.serviceMesh.istio.enabled .Values.serviceMesh.istio.injectSidecar }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- $ann := include "synapse.annotations" (dict "root" . "specific" .Values.podAnnotations) }}
+        {{- if $ann }}
+        {{- $ann | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "synapse.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if .Values.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity.type "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
+              labelSelector:
+                matchLabels:
+                  {{- include "synapse.selectorLabels" . | nindent 18 }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
+                labelSelector:
+                  matchLabels:
+                    {{- include "synapse.selectorLabels" . | nindent 20 }}
+          {{- end }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: synapse
+          image: {{ include "synapse.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $clustered }}
+          command:
+            - /bin/bash
+            - /etc/synapse-bootstrap/bootstrap.sh
+          {{- end }}
+          args:
+            - serve
+            {{- if .Values.server.http.enabled }}
+            - --http-port
+            - {{ .Values.server.http.port | quote }}
+            {{- if not .Values.server.http.debugEndpoints }}
+            - --no-debug
+            {{- end }}
+            {{- else }}
+            # 0 disables the HTTP listener entirely.
+            - --http-port
+            - "0"
+            {{- end }}
+            - --staging-dir
+            - {{ .Values.server.stagingDir | quote }}
+            - --max-inbound-mb
+            - {{ .Values.server.maxInboundMb | quote }}
+            - --max-outbound-mb
+            - {{ .Values.server.maxOutboundMb | quote }}
+            - --max-concurrent-streams
+            - {{ .Values.server.maxConcurrentStreams | quote }}
+            {{- with .Values.server.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.server.grpc.port }}
+              protocol: TCP
+            {{- if .Values.server.http.enabled }}
+            - name: http
+              containerPort: {{ .Values.server.http.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.server.bolt.enabled }}
+            - name: bolt
+              containerPort: {{ .Values.server.bolt.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if $clustered }}
+            - name: raft
+              containerPort: {{ .Values.cluster.raftPort }}
+              protocol: TCP
+            {{- if .Values.cluster.admin.enabled }}
+            - name: admin
+              containerPort: {{ .Values.cluster.admin.port }}
+              protocol: TCP
+            {{- end }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "synapse.fullname" . }}-env
+            {{- if not .Values.auth.existingSecret }}
+            - secretRef:
+                name: {{ include "synapse.fullname" . }}-credentials
+            {{- end }}
+            {{- if .Values.tier.existingLicenseSecret }}
+            - secretRef:
+                name: {{ .Values.tier.existingLicenseSecret }}
+            {{- else if .Values.tier.licenseKey }}
+            - secretRef:
+                name: {{ include "synapse.fullname" . }}-license
+            {{- end }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if not $clustered }}
+            # Stable operator-facing node identity across restarts.
+            - name: SYNAPSE_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+            {{- if .Values.auth.existingSecret }}
+            - name: SYNAPSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.username }}
+            - name: SYNAPSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.password }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          # Synapse opens RocksDB, rebuilds vector and text indexes, and in
+          # cluster mode replays the Raft log tail before it serves. The
+          # startup probe is what gives that work a long budget without
+          # loosening the liveness threshold afterwards.
+          startupProbe:
+            {{- if .Values.server.http.enabled }}
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: {{ $probeScheme }}
+            {{- else }}
+            tcpSocket:
+              port: grpc
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            {{- if .Values.server.http.enabled }}
+            httpGet:
+              path: /health/live
+              port: http
+              scheme: {{ $probeScheme }}
+            {{- else }}
+            tcpSocket:
+              port: grpc
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            {{- if .Values.server.http.enabled }}
+            # /health/ready reports 503 until storage, catalog and the
+            # session manager are all up, so it gates traffic properly.
+            httpGet:
+              path: /health/ready
+              port: http
+              scheme: {{ $probeScheme }}
+            {{- else }}
+            tcpSocket:
+              port: grpc
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.dataDir }}
+            - name: config
+              mountPath: /etc/synapse
+              readOnly: true
+            {{- if $clustered }}
+            - name: bootstrap
+              mountPath: /etc/synapse-bootstrap
+              readOnly: true
+            - name: runtime-config
+              mountPath: /run/synapse
+            {{- if .Values.cluster.tls.enabled }}
+            - name: cluster-tls
+              mountPath: /etc/synapse-cluster-tls
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if .Values.externalAuth.enabled }}
+            - name: external-auth
+              mountPath: /etc/synapse-auth
+              readOnly: true
+            {{- end }}
+            - name: staging
+              mountPath: {{ .Values.server.stagingDir }}
+            {{- if .Values.ml.persistence.mlEnv.enabled }}
+            - name: ml-env
+              mountPath: /app/micromamba
+            {{- end }}
+            {{- if .Values.ml.persistence.models.enabled }}
+            - name: models
+              mountPath: /app/models
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "synapse.configMapName" . }}
+        {{- if $clustered }}
+        - name: bootstrap
+          configMap:
+            name: {{ include "synapse.fullname" . }}-bootstrap
+            defaultMode: 0755
+        - name: runtime-config
+          emptyDir: {}
+        {{- if .Values.cluster.tls.enabled }}
+        - name: cluster-tls
+          secret:
+            secretName: {{ .Values.cluster.tls.existingSecret }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.externalAuth.enabled }}
+        - name: external-auth
+          secret:
+            secretName: {{ default (printf "%s-external-auth" (include "synapse.fullname" .)) .Values.externalAuth.existingSecret }}
+        {{- end }}
+        - name: staging
+          emptyDir: {}
+        {{- if not .Values.persistence.data.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- if or .Values.persistence.data.enabled .Values.ml.persistence.mlEnv.enabled .Values.ml.persistence.models.enabled }}
+  volumeClaimTemplates:
+    {{- if .Values.persistence.data.enabled }}
+    - metadata:
+        name: data
+        labels:
+          {{- include "synapse.labels" . | nindent 10 }}
+        {{- with .Values.persistence.data.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.data.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.data.size }}
+        {{- if .Values.persistence.data.storageClass }}
+        storageClassName: {{ .Values.persistence.data.storageClass }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.ml.persistence.mlEnv.enabled }}
+    - metadata:
+        name: ml-env
+        labels:
+          {{- include "synapse.labels" . | nindent 10 }}
+        {{- with .Values.ml.persistence.mlEnv.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.ml.persistence.mlEnv.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.ml.persistence.mlEnv.size }}
+        {{- if .Values.ml.persistence.mlEnv.storageClass }}
+        storageClassName: {{ .Values.ml.persistence.mlEnv.storageClass }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.ml.persistence.models.enabled }}
+    - metadata:
+        name: models
+        labels:
+          {{- include "synapse.labels" . | nindent 10 }}
+        {{- with .Values.ml.persistence.models.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.ml.persistence.models.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.ml.persistence.models.size }}
+        {{- if .Values.ml.persistence.models.storageClass }}
+        storageClassName: {{ .Values.ml.persistence.models.storageClass }}
+        {{- end }}
+    {{- end }}
+  {{- end }}

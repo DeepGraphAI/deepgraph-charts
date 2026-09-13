@@ -1,0 +1,105 @@
+# kube-prometheus-stack values tuned for Synapse.
+#
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     -n observability -f kube-prometheus-stack.values.yaml
+
+prometheus:
+  prometheusSpec:
+    # Watch ServiceMonitors and PrometheusRules in every namespace, not just
+    # ones carrying the release label. Without this, a ServiceMonitor created
+    # in the synapse namespace is silently ignored and the target never
+    # appears - the single most common reason "metrics don't work".
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    retention: 15d
+    retentionSize: 40GB
+
+    # Exemplars let a latency spike on a dashboard link straight through to
+    # the trace that caused it.
+    enableFeatures:
+      - exemplar-storage
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        memory: 4Gi
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+grafana:
+  adminPassword: ""  # leave empty to have the chart generate one
+
+  sidecar:
+    dashboards:
+      enabled: true
+      # Must match observability.grafanaDashboard.label in the Synapse values.
+      label: grafana_dashboard
+      labelValue: "1"
+      # Watch all namespaces so the dashboard ConfigMap can live next to
+      # Synapse rather than next to Grafana.
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      searchNamespace: ALL
+
+  # Loki and Tempo are not part of this chart, so they are declared here.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki.observability.svc.cluster.local:3100
+      jsonData:
+        # Clicking a trace ID in a log line opens it in Tempo.
+        derivedFields:
+          - name: TraceID
+            matcherRegex: '"trace_id":"(\w+)"'
+            url: "$${__value.raw}"
+            datasourceUid: tempo
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo.observability.svc.cluster.local:3200
+      jsonData:
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+        tracesToLogsV2:
+          datasourceUid: loki
+          filterByTraceID: true
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+# kube-state-metrics supplies kube_pod_container_resource_limits, which the
+# memory alert and the "RSS against limit" dashboard panel both divide by.
+kubeStateMetrics:
+  enabled: true

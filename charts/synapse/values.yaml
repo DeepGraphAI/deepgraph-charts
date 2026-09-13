@@ -1,0 +1,575 @@
+# Default values for the Synapse chart.
+#
+# Every key below is documented in charts/synapse/README.md, and the
+# examples/ directory holds ready-to-use value files for common shapes
+# (minimal, production single node, HA cluster, observability, service
+# mesh, air-gapped, GPU).
+#
+# The two values you must set are auth.password and image.repository.
+
+# -----------------------------------------------------------------------------
+# Image
+# -----------------------------------------------------------------------------
+image:
+  # Registry path of the Synapse server image.
+  repository: synapse
+  # Image tag. Empty string means "use the chart's appVersion".
+  tag: ""
+  # Pin by digest instead of tag. When set, tag is ignored.
+  digest: ""
+  pullPolicy: IfNotPresent
+  # Names of imagePullSecrets in this namespace.
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Cluster DNS domain, used to build pod FQDNs for Raft peering.
+clusterDomain: cluster.local
+
+# Extra labels merged into every rendered object.
+commonLabels: {}
+# Extra annotations merged into every rendered object.
+commonAnnotations: {}
+
+# -----------------------------------------------------------------------------
+# Topology
+# -----------------------------------------------------------------------------
+# Number of Synapse pods. Leave at 1 unless cluster.enabled is true.
+#
+# Synapse replicates through Raft, not through a shared volume. Running
+# replicaCount > 1 with cluster.enabled=false gives you N independent
+# databases behind one Service, which is almost never what you want - the
+# chart warns about this at install time.
+replicaCount: 1
+
+# -----------------------------------------------------------------------------
+# Authentication
+# -----------------------------------------------------------------------------
+auth:
+  # Bootstrap admin username. Applied only on first start, when the data
+  # directory is empty.
+  username: admin
+  # Bootstrap admin password. Required unless existingSecret is set.
+  password: ""
+  # Use a pre-existing Secret instead of having the chart create one.
+  existingSecret: ""
+  # Keys to read from existingSecret.
+  secretKeys:
+    username: SYNAPSE_USER
+    password: SYNAPSE_PASSWORD
+
+# -----------------------------------------------------------------------------
+# Tier and licensing
+# -----------------------------------------------------------------------------
+tier:
+  # enterprise | professional | graphlite
+  level: enterprise
+  # License key, injected as SYNAPSE_LICENSE_KEY.
+  licenseKey: ""
+  # Read the license from an existing Secret instead. The Secret must hold
+  # a SYNAPSE_LICENSE_KEY key.
+  existingLicenseSecret: ""
+
+# -----------------------------------------------------------------------------
+# Server listeners and runtime flags
+# -----------------------------------------------------------------------------
+server:
+  # gRPC API. This is the primary client protocol; it cannot be disabled.
+  grpc:
+    port: 50051
+
+  # HTTP listener: bundled UI, REST API (/api/*), /health, /health/live,
+  # /health/ready and /metrics. Probes and the ServiceMonitor need it.
+  http:
+    enabled: true
+    port: 8080
+    # Request timeout for standard routes, in seconds. Raise this for
+    # long-running ingestion calls driven over REST.
+    timeoutSeconds: 30
+    # Request timeout for conversational-agent routes, in seconds.
+    agentTimeoutSeconds: 300
+    maxConnections: 1000
+    # Expose /debug/* endpoints. Turn this off in production.
+    debugEndpoints: false
+    # Cross-origin callers allowed to reach the REST API. Leave empty when
+    # the bundled same-origin UI is the only client.
+    corsOrigins: []
+
+  # BOLT listener, for Neo4j-compatible drivers.
+  bolt:
+    enabled: false
+    port: 7687
+    # gql, opencypher, or both (comma separated).
+    languages: "gql,opencypher"
+    maxConnections: 512
+    idleTimeoutSeconds: 600
+    # Host:port clients should be told to reconnect to. Set this when
+    # traffic reaches the pod through an ingress or mesh gateway.
+    advertisedAddress: ""
+
+  # trace | debug | info | warn | error
+  logLevel: info
+  # text | json - use json when shipping logs to a structured backend.
+  logFormat: json
+
+  # gRPC message limits.
+  maxInboundMb: 64
+  maxOutboundMb: 2047
+  maxConcurrentStreams: 1000
+
+  # Staging directory for large batch payloads.
+  stagingDir: /tmp/synapse/staging
+
+  # Extra arguments appended to the synapse-server command line.
+  extraArgs: []
+
+# Data directory inside the container. The data PVC is mounted here.
+dataDir: /synapse-data
+
+# -----------------------------------------------------------------------------
+# AI / ML environment
+# -----------------------------------------------------------------------------
+ml:
+  # Which models to download on first start:
+  #   none - skip all downloads. Fastest start; graph, vector and text
+  #          search all work. Only the built-in embedding and extraction
+  #          models are unavailable.
+  #   all  - download everything. Adds 15-30 minutes to first start and
+  #          needs egress to the model hub.
+  #   or a comma-separated subset, for example "qwen,spacy".
+  #
+  # Defaults to none because a pod that spends half an hour downloading
+  # models before it reports ready is a bad default in Kubernetes. Set it
+  # to all (plus ml.persistence) when you need the embedding pipeline.
+  models: none
+
+  # Persist the Python environment created on first start. Without this,
+  # every pod restart rebuilds it.
+  persistence:
+    mlEnv:
+      enabled: false
+      size: 20Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+      annotations: {}
+    models:
+      enabled: false
+      size: 30Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+      annotations: {}
+
+# -----------------------------------------------------------------------------
+# Server configuration file (synapse.toml)
+# -----------------------------------------------------------------------------
+config:
+  # Inline synapse.toml. Rendered into a ConfigMap and mounted at
+  # /etc/synapse/synapse.toml. Leave empty to use a minimal generated file
+  # carrying just the tier - every other setting then falls back to the
+  # server's compiled-in defaults, which is the right starting point.
+  #
+  # In cluster mode the chart appends a per-pod [cluster] section to
+  # whatever you put here, so do not write [cluster] yourself.
+  synapseToml: ""
+  # Use a pre-existing ConfigMap instead. It must hold a synapse.toml key.
+  existingConfigMap: ""
+
+# Standalone external-authentication config (TOML with an [external_auth]
+# section), for wiring an external identity provider.
+externalAuth:
+  enabled: false
+  # Inline TOML. Mutually exclusive with existingSecret.
+  config: ""
+  # Read the TOML from an existing Secret holding an external-auth.toml key.
+  existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# Multi-node cluster (Raft)
+# -----------------------------------------------------------------------------
+cluster:
+  # Turn on Raft replication across replicaCount pods. Requires
+  # persistence.data.enabled and an odd replicaCount of 3 or more.
+  enabled: false
+
+  # Port each pod binds its Raft RPC service on.
+  raftPort: 5701
+
+  # Operator-facing admin gRPC service (used by synapsectl cluster ...).
+  admin:
+    enabled: true
+    port: 5702
+
+  # Per-RPC client timeout in milliseconds.
+  rpcTimeoutMs: 5000
+
+  # Raft log entries between snapshots. Empty means the server default.
+  snapshotLogsThreshold: ""
+  # Snapshotted entries retained on disk. Empty means the server default.
+  maxInSnapshotLogToKeep: ""
+
+  # Raft engine timing. Leave empty for LAN defaults; raise every value
+  # for multi-AZ or cross-region deployments where RTT is higher.
+  raft:
+    heartbeatIntervalMs: ""
+    electionTimeoutMinMs: ""
+    electionTimeoutMaxMs: ""
+    maxPayloadEntries: ""
+
+  # mTLS between Raft peers. Strongly recommended in production; the
+  # Raft port carries replicated writes in the clear without it.
+  tls:
+    enabled: false
+    # Secret holding ca.crt, tls.crt and tls.key.
+    existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# Services
+# -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+  # Only honoured when type is LoadBalancer.
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  externalTrafficPolicy: ""
+  # sessionAffinity ClientIP keeps a client pinned to one pod, which
+  # matters for session-scoped GQL state behind a multi-pod Service.
+  sessionAffinity: None
+  # Only honoured when type is NodePort or LoadBalancer.
+  nodePorts:
+    grpc: ""
+    http: ""
+    bolt: ""
+
+headlessService:
+  annotations: {}
+  # Let clients resolve pods before they pass readiness. Required for
+  # Raft peering, since peers must find each other during bootstrap.
+  publishNotReadyAddresses: true
+
+# -----------------------------------------------------------------------------
+# Ingress (HTTP listener: bundled UI + REST API)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: synapse.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: synapse-tls
+  #    hosts:
+  #      - synapse.example.com
+
+# -----------------------------------------------------------------------------
+# Persistence
+# -----------------------------------------------------------------------------
+persistence:
+  data:
+    enabled: true
+    size: 50Gi
+    # Empty means the cluster's default StorageClass.
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    annotations: {}
+    # Keep PVCs when the StatefulSet is deleted. Set to Delete only if
+    # you are certain the data is disposable.
+    retentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+
+# -----------------------------------------------------------------------------
+# Probes
+# -----------------------------------------------------------------------------
+# When the HTTP listener is enabled these hit /health/live and
+# /health/ready. Otherwise they fall back to a TCP check on the gRPC port,
+# which only proves the socket is bound.
+probes:
+  startup:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    # 60 x 10s = 10 minutes. Raise this when ml.models is not none: a
+    # first start that downloads models can take 15-30 minutes.
+    failureThreshold: 60
+  liveness:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readiness:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+# -----------------------------------------------------------------------------
+# Resources and scheduling
+# -----------------------------------------------------------------------------
+# Synapse holds graph structure, vector indexes and caches in memory.
+# Size the memory limit against your working set; the request should be
+# close to the limit, because eviction under memory pressure costs a full
+# index rebuild on restart.
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 8Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# Spread pods across zones and nodes. Applied only when affinity is empty.
+podAntiAffinity:
+  enabled: true
+  # soft keeps scheduling possible on small clusters; hard refuses to
+  # co-locate two Synapse pods on one node.
+  type: soft
+  topologyKey: kubernetes.io/hostname
+topologySpreadConstraints: []
+priorityClassName: ""
+
+# RocksDB flushes and the Raft log need time to settle on shutdown.
+terminationGracePeriodSeconds: 120
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: ""
+  maxUnavailable: 1
+
+# -----------------------------------------------------------------------------
+# Security
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  # The first-run setup writes into /app, so the root filesystem stays
+  # writable. Set this to true only with ml.models=none and a pre-built
+  # image that needs no first-run work.
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+networkPolicy:
+  enabled: false
+  # Namespace and pod selectors allowed to reach the client ports. Empty
+  # means every pod in the release namespace.
+  allowedClients: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: applications
+  # Allow the pods to reach anything outbound. Turn this off and add
+  # explicit egress rules for a locked-down namespace.
+  allowExternalEgress: true
+
+# -----------------------------------------------------------------------------
+# Observability
+# -----------------------------------------------------------------------------
+observability:
+  # Annotate pods for annotation-based Prometheus discovery. Leave off
+  # when using the Prometheus Operator, which uses the ServiceMonitor.
+  podAnnotations:
+    enabled: false
+
+  # Prometheus Operator ServiceMonitor. Requires server.http.enabled.
+  serviceMonitor:
+    enabled: false
+    # Namespace to create it in. Empty means the release namespace.
+    namespace: ""
+    # Extra labels - set these to whatever your Prometheus instance
+    # selects on (often release: kube-prometheus-stack).
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: false
+    relabelings: []
+    metricRelabelings: []
+
+  # Prometheus Operator PrometheusRule carrying the alert set below.
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    labels: {}
+    # Built-in alerts. Set any threshold to "" to drop that alert.
+    rules:
+      queryLatency:
+        enabled: true
+        # Seconds, p95 over 5 minutes.
+        threshold: 1
+        for: 5m
+        severity: warning
+      errorRate:
+        enabled: true
+        # Fraction of queries returning an error, 0.05 = 5%.
+        threshold: 0.05
+        for: 5m
+        severity: critical
+      memoryUsage:
+        enabled: true
+        # Fraction of the container memory limit.
+        threshold: 0.9
+        for: 10m
+        severity: warning
+      searchLatency:
+        enabled: true
+        # Seconds, p95 hybrid search latency over 5 minutes.
+        threshold: 0.5
+        for: 5m
+        severity: warning
+      instanceDown:
+        enabled: true
+        for: 2m
+        severity: critical
+      # Cluster-only alerts. Ignored unless cluster.enabled is true.
+      raftApplyLag:
+        enabled: true
+        # Seconds a follower may trail the leader.
+        threshold: 30
+        for: 5m
+        severity: warning
+      raftApplyErrors:
+        enabled: true
+        for: 5m
+        severity: critical
+    # Additional rules appended verbatim to the group.
+    extraRules: []
+
+  # Ship the bundled dashboard as a ConfigMap for a Grafana sidecar to
+  # pick up. Requires a Grafana deployment with dashboard sidecar
+  # discovery turned on.
+  grafanaDashboard:
+    enabled: false
+    namespace: ""
+    # Label the Grafana sidecar watches for.
+    label: grafana_dashboard
+    labelValue: "1"
+    # Grafana folder annotation.
+    folder: Synapse
+    extraLabels: {}
+
+  # OpenTelemetry trace export.
+  otel:
+    enabled: false
+    # OTLP collector endpoint.
+    endpoint: http://opentelemetry-collector:4317
+    # grpc | http
+    protocol: grpc
+    # Empty means the release fullname.
+    serviceName: ""
+    # 0.0 to 1.0.
+    sampleRate: 0.1
+    exportTimeoutSeconds: 10
+    # Value of the deployment.environment resource attribute.
+    environment: production
+
+# -----------------------------------------------------------------------------
+# Service mesh
+# -----------------------------------------------------------------------------
+serviceMesh:
+  istio:
+    enabled: false
+    # Add sidecar.istio.io/inject=true to the pod template. Prefer
+    # labelling the namespace instead when you can.
+    injectSidecar: true
+
+    peerAuthentication:
+      enabled: true
+      # STRICT | PERMISSIVE | DISABLE. Use PERMISSIVE while migrating
+      # clients into the mesh, then move to STRICT.
+      mode: STRICT
+
+    gateway:
+      enabled: false
+      selector:
+        istio: ingressgateway
+      hosts:
+        - synapse.example.com
+      # TLS for the HTTP server block.
+      tls:
+        enabled: false
+        # SIMPLE | MUTUAL
+        mode: SIMPLE
+        credentialName: ""
+      # Expose the gRPC port through the gateway as well.
+      exposeGrpc: true
+
+    virtualService:
+      enabled: false
+      # Empty means reuse gateway.hosts.
+      hosts: []
+      # Extra gateways to bind, beyond the one this chart creates.
+      extraGateways: []
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+
+    destinationRule:
+      enabled: false
+      connectionPool:
+        tcp:
+          maxConnections: 200
+        http:
+          h2UpgradePolicy: UPGRADE
+          http2MaxRequests: 200
+          maxRequestsPerConnection: 0
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: 30s
+        baseEjectionTime: 30s
+        maxEjectionPercent: 50
+
+# -----------------------------------------------------------------------------
+# Escape hatches
+# -----------------------------------------------------------------------------
+# Extra environment variables, in the standard container env form.
+extraEnv: []
+#  - name: SYNAPSE_GRAPH_CACHE_BYTES
+#    value: "4294967296"
+
+# Extra envFrom sources (ConfigMaps or Secrets).
+extraEnvFrom: []
+#  - secretRef:
+#      name: synapse-extra
+
+extraVolumes: []
+extraVolumeMounts: []
+extraInitContainers: []
+extraContainers: []
+
+podAnnotations: {}
+podLabels: {}
+
+# Extra objects rendered verbatim. Each entry is a full manifest, and
+# Helm templating inside the strings is evaluated.
+extraManifests: []

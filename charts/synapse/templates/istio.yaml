@@ -1,0 +1,152 @@
+{{- if .Values.serviceMesh.istio.enabled }}
+{{- $istio := .Values.serviceMesh.istio }}
+{{- $fullname := include "synapse.fullname" . }}
+{{- if $istio.peerAuthentication.enabled }}
+# Mesh-internal mTLS. STRICT rejects any plaintext connection to these pods,
+# which is what makes the Raft and gRPC ports safe to leave unencrypted at
+# the application layer. Move through PERMISSIVE first if clients are still
+# being migrated into the mesh.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "synapse.selectorLabels" . | nindent 6 }}
+  mtls:
+    mode: {{ $istio.peerAuthentication.mode }}
+{{- end }}
+
+{{- if $istio.gateway.enabled }}
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- toYaml $istio.gateway.selector | nindent 4 }}
+  servers:
+    - port:
+        number: {{ if $istio.gateway.tls.enabled }}443{{ else }}80{{ end }}
+        name: {{ if $istio.gateway.tls.enabled }}https{{ else }}http{{ end }}
+        protocol: {{ if $istio.gateway.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+      hosts:
+        {{- toYaml $istio.gateway.hosts | nindent 8 }}
+      {{- if $istio.gateway.tls.enabled }}
+      tls:
+        mode: {{ $istio.gateway.tls.mode }}
+        credentialName: {{ $istio.gateway.tls.credentialName | quote }}
+      {{- end }}
+    {{- if $istio.gateway.exposeGrpc }}
+    # gRPC is declared as its own server block rather than folded into the
+    # HTTP one: the sidecar needs to know it is HTTP/2 end to end, otherwise
+    # streaming responses are buffered.
+    - port:
+        number: {{ .Values.server.grpc.port }}
+        name: grpc
+        protocol: GRPC
+      hosts:
+        {{- toYaml $istio.gateway.hosts | nindent 8 }}
+    {{- end }}
+{{- end }}
+
+{{- if $istio.virtualService.enabled }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- if $istio.virtualService.hosts }}
+    {{- toYaml $istio.virtualService.hosts | nindent 4 }}
+    {{- else }}
+    {{- toYaml $istio.gateway.hosts | nindent 4 }}
+    {{- end }}
+    - {{ $fullname }}
+  gateways:
+    {{- if $istio.gateway.enabled }}
+    - {{ $fullname }}
+    {{- end }}
+    # "mesh" makes the same routing apply to in-cluster callers, so a client
+    # inside the mesh gets the same timeout and retry policy as one arriving
+    # through the gateway.
+    - mesh
+    {{- with $istio.virtualService.extraGateways }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if .Values.server.http.enabled }}
+  http:
+    - name: http
+      route:
+        - destination:
+            host: {{ $fullname }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+            port:
+              number: {{ .Values.server.http.port }}
+      timeout: {{ $istio.virtualService.timeout }}
+      {{- with $istio.virtualService.retries }}
+      retries:
+        attempts: {{ .attempts }}
+        perTryTimeout: {{ .perTryTimeout }}
+        # Retrying a 5xx from a database is only safe for reads. Synapse
+        # writes are transactional, so a retried write either commits once
+        # or aborts - but keep attempts low and let clients own write retry.
+        retryOn: gateway-error,connect-failure,refused-stream
+      {{- end }}
+  {{- end }}
+  tcp:
+    - match:
+        - port: {{ .Values.server.grpc.port }}
+      route:
+        - destination:
+            host: {{ $fullname }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+            port:
+              number: {{ .Values.server.grpc.port }}
+    {{- if .Values.server.bolt.enabled }}
+    - match:
+        - port: {{ .Values.server.bolt.port }}
+      route:
+        - destination:
+            host: {{ $fullname }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+            port:
+              number: {{ .Values.server.bolt.port }}
+    {{- end }}
+{{- end }}
+
+{{- if $istio.destinationRule.enabled }}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+spec:
+  host: {{ $fullname }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+  trafficPolicy:
+    connectionPool:
+      {{- toYaml $istio.destinationRule.connectionPool | nindent 6 }}
+    {{- if eq (include "synapse.clusterEnabled" .) "true" }}
+    # In cluster mode the leader is the only pod that accepts writes, and
+    # ejecting it on a transient 5xx would take the write path down rather
+    # than route around a bad replica. Outlier detection is deliberately
+    # left off; set serviceMesh.istio.destinationRule.outlierDetection
+    # yourself only if you know follower reads are acceptable.
+    {{- else }}
+    outlierDetection:
+      {{- toYaml $istio.destinationRule.outlierDetection | nindent 6 }}
+    {{- end }}
+{{- end }}
+{{- end }}

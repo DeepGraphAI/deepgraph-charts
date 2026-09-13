@@ -1,0 +1,122 @@
+# Single-node production
+# ----------------------
+# One Synapse pod, sized and locked down for real workloads. Use this when
+# you can tolerate the restart window of a single node (typically under a
+# minute, plus index rebuild time) and do not need Raft replication.
+#
+#   kubectl create namespace synapse
+#   kubectl -n synapse create secret generic synapse-admin \
+#     --from-literal=SYNAPSE_USER=admin \
+#     --from-literal=SYNAPSE_PASSWORD="$(openssl rand -base64 24)"
+#   helm install synapse synapse/synapse -n synapse -f examples/02-single-node-production.yaml
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+auth:
+  # Keep the password out of values files and out of Helm release history.
+  existingSecret: synapse-admin
+
+tier:
+  level: enterprise
+  existingLicenseSecret: synapse-license
+
+server:
+  logLevel: info
+  logFormat: json
+  http:
+    enabled: true
+    # /debug/* exposes memory maps, in-flight queries and index internals.
+    # It has no auth of its own by default.
+    debugEndpoints: false
+    # Ingestion driven over REST can run long; the default 30s is tuned for
+    # interactive queries.
+    timeoutSeconds: 120
+
+ml:
+  # No model downloads: graph, vector and text search all work without them.
+  # Only the built-in embedding and extraction pipelines need them, and
+  # those are covered in the AI example.
+  models: none
+
+persistence:
+  data:
+    enabled: true
+    size: 500Gi
+    # Graph traversal is random-read heavy. Use SSD-backed storage; network
+    # HDD turns a 5ms hop into a 50ms one and multi-hop queries compound it.
+    storageClass: gp3
+    retentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+
+# Memory is the resource that matters. Synapse holds graph structure, vector
+# indexes and caches resident, and an OOM kill costs a full index rebuild on
+# restart - so request close to the limit rather than relying on burst.
+resources:
+  requests:
+    cpu: "4"
+    memory: 24Gi
+  limits:
+    cpu: "8"
+    memory: 32Gi
+
+# RocksDB flush plus index checkpointing needs room to finish on shutdown.
+terminationGracePeriodSeconds: 300
+
+probes:
+  startup:
+    # 20 minutes. Index rebuild time scales with graph size, and a startup
+    # probe that gives up mid-rebuild produces a crash loop that looks like
+    # a broken image.
+    failureThreshold: 120
+    periodSeconds: 10
+
+podSecurityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+networkPolicy:
+  enabled: true
+  allowedClients:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: applications
+  allowExternalEgress: true
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  grafanaDashboard:
+    enabled: true
+
+# A single replica has nothing to fail over to, so block voluntary eviction
+# during node drains rather than letting the cluster autoscaler take the
+# database down without warning.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 0

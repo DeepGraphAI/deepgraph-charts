@@ -1,0 +1,76 @@
+# BOLT protocol for Neo4j-compatible drivers
+# ------------------------------------------
+# Exposes the BOLT listener so existing Neo4j drivers (Python, JavaScript,
+# Java, Go) and tools that speak BOLT can connect to Synapse.
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/09-bolt-drivers.yaml
+#
+# Connecting from an application pod in the same cluster:
+#
+#   from neo4j import GraphDatabase
+#   driver = GraphDatabase.driver(
+#       "bolt://synapse.synapse.svc.cluster.local:7687",
+#       auth=("admin", password),
+#   )
+#
+# Note the URI scheme: use bolt:// and not neo4j://. The neo4j:// scheme
+# triggers routing-table discovery, which Synapse does not implement.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  existingSecret: synapse-admin
+
+server:
+  bolt:
+    enabled: true
+    port: 7687
+    # Accept both dialects on the same port. Narrow this to "gql" if you
+    # want the standard dialect enforced and openCypher rejected.
+    languages: "gql,opencypher"
+    maxConnections: 512
+    idleTimeoutSeconds: 600
+    # Only needed when clients reach the server through a load balancer or
+    # gateway: drivers reconnect to whatever the server advertises, and the
+    # pod's own address is not reachable from outside.
+    advertisedAddress: ""
+
+  http:
+    enabled: true
+    debugEndpoints: false
+
+# BOLT is a plaintext TCP protocol as configured here. Either keep it
+# inside the cluster as below, put it behind a mesh with mTLS (example 05),
+# or terminate TLS with server.bolt TLS settings and a mounted keypair.
+service:
+  type: ClusterIP
+  # Drivers hold long-lived connections and Synapse keeps session state
+  # against them, so pin each client to one pod.
+  sessionAffinity: ClientIP
+
+networkPolicy:
+  enabled: true
+  allowedClients:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: applications
+
+persistence:
+  data:
+    size: 200Gi
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+  limits:
+    cpu: "4"
+    memory: 16Gi
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack

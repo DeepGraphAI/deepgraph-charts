@@ -1,0 +1,25 @@
+# Minimal install
+# ---------------
+# The smallest values file that produces a working Synapse.
+#
+#   helm install synapse synapse/synapse -f examples/01-minimal.yaml
+#
+# What you get: one pod, 50Gi of persistent storage, gRPC on 50051, the
+# bundled UI and REST API on 8080, and no model downloads - so the pod is
+# ready in well under a minute.
+#
+# What you do NOT get, and should read the other examples for: TLS,
+# restricted network access, metrics scraping, or any redundancy.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  username: admin
+  # Change this. Anyone who can reach port 50051 can use it.
+  password: "change-me"
+
+persistence:
+  data:
+    size: 50Gi

@@ -1,0 +1,65 @@
+# Loki, single-binary mode. Fine for a Synapse deployment's log volume; move
+# to the distributed chart if you are centralizing logs for a whole cluster.
+#
+#   helm install loki grafana/loki -n observability -f loki.values.yaml
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  limits_config:
+    retention_period: 720h  # 30 days
+    # A debug-level Synapse instance can produce a lot of lines in a burst;
+    # the chart default rejects them rather than buffering.
+    ingestion_rate_mb: 16
+    ingestion_burst_size_mb: 32
+    max_query_series: 5000
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 100Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# Not needed in single-binary mode.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+gateway:
+  enabled: false
+
+test:
+  enabled: false
+lokiCanary:
+  enabled: false

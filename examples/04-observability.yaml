@@ -1,0 +1,131 @@
+# Full observability: metrics, logs and traces
+# --------------------------------------------
+# Wires Synapse into a Prometheus + Loki + Grafana + Tempo stack.
+#
+#   metrics  Synapse serves Prometheus text on :8080/metrics. A ServiceMonitor
+#            points the Prometheus Operator at it, and a PrometheusRule ships
+#            the alert set.
+#   logs     The server writes structured JSON to stdout, which Promtail (or
+#            Grafana Alloy) picks up without any parsing rules to maintain.
+#   traces   Spans go out over OTLP to a collector, which forwards to Tempo.
+#
+# The companion stack itself - Prometheus, Loki, Grafana, Tempo and the OTEL
+# collector - is installed separately; see examples/observability-stack/.
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/04-observability.yaml
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  existingSecret: synapse-admin
+
+server:
+  # JSON logs are what makes Loki queryable without a regex pipeline:
+  # | json | level="error" works directly on the stream.
+  logFormat: json
+  logLevel: info
+  http:
+    enabled: true
+    debugEndpoints: false
+
+persistence:
+  data:
+    size: 200Gi
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+  limits:
+    cpu: "4"
+    memory: 16Gi
+
+observability:
+  # Prometheus Operator discovery. The label has to match what your
+  # Prometheus resource selects on - check with:
+  #   kubectl get prometheus -A -o jsonpath='{..serviceMonitorSelector}'
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: kube-prometheus-stack
+    metricRelabelings:
+      # The per-query-type histograms are high cardinality on a busy
+      # instance. Drop the buckets you do not alert or chart on rather than
+      # paying for them in every scrape.
+      - sourceLabels: [__name__]
+        regex: "synapse_test_.*"
+        action: drop
+
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    rules:
+      queryLatency:
+        enabled: true
+        threshold: 1
+        for: 5m
+        severity: warning
+      errorRate:
+        enabled: true
+        threshold: 0.05
+        for: 5m
+        severity: critical
+      memoryUsage:
+        enabled: true
+        threshold: 0.9
+        for: 10m
+        severity: warning
+      searchLatency:
+        enabled: true
+        threshold: 0.5
+        for: 5m
+        severity: warning
+      instanceDown:
+        enabled: true
+        for: 2m
+        severity: critical
+    extraRules:
+      # Storage write stall: RocksDB is taking writes but the byte counter
+      # has flatlined while queries keep arriving.
+      - alert: SynapseStorageWriteStall
+        expr: >-
+          rate(synapse_storage_bytes_written_total[5m]) == 0
+          and rate(synapse_transaction_commits_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synapse is committing transactions but writing no bytes"
+          description: "Commits are flowing while storage writes have stopped. Check disk pressure and the volume's health."
+
+  # Imported by the Grafana dashboard sidecar. Requires
+  # grafana.sidecar.dashboards.enabled in your Grafana release.
+  grafanaDashboard:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    folder: Synapse
+
+  otel:
+    enabled: true
+    endpoint: http://opentelemetry-collector.observability.svc.cluster.local:4317
+    protocol: grpc
+    serviceName: synapse
+    # Trace every span in staging; keep production well below 1.0 or the
+    # export path becomes the bottleneck under load.
+    sampleRate: 0.1
+    exportTimeoutSeconds: 10
+    environment: production
+
+# Promtail and Alloy both discover by pod label; these make the stream easy
+# to select without hardcoding a release name in the log query.
+podLabels:
+  observability.deepgraph.ai/scrape-logs: "true"
+
+commonLabels:
+  app.kubernetes.io/part-of: synapse

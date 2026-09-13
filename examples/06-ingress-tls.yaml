@@ -1,0 +1,76 @@
+# Public UI and REST API behind an Ingress
+# ----------------------------------------
+# Publishes the bundled web UI and the REST API on a hostname with a
+# cert-manager-issued certificate.
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/06-ingress-tls.yaml
+#
+# Scope: an Ingress carries HTTP only, so this exposes port 8080. The gRPC
+# and BOLT ports stay inside the cluster. To publish those as well you need
+# a gateway that speaks TCP or HTTP/2 end to end - see the service mesh
+# example, or a Gateway API implementation.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+auth:
+  existingSecret: synapse-admin
+
+server:
+  http:
+    enabled: true
+    debugEndpoints: false
+    # The UI is served from the same origin as the API, so no cross-origin
+    # allowance is needed. Add one only for a separately hosted front end.
+    corsOrigins: []
+    timeoutSeconds: 60
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # Query results and ingestion payloads are both larger than the 1MB
+    # nginx default, which would otherwise surface as a confusing 413.
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+
+    # Long-running queries need more than the 60s default.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+
+    # The UI and API have no IP-based protection of their own; a login still
+    # applies, but rate limiting blunts credential stuffing.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+
+  hosts:
+    - host: synapse.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls:
+    - secretName: synapse-tls
+      hosts:
+        - synapse.example.com
+
+persistence:
+  data:
+    size: 200Gi
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+  limits:
+    cpu: "4"
+    memory: 16Gi
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack

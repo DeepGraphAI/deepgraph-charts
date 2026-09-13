@@ -1,0 +1,20 @@
+{{- if .Values.observability.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synapse.fullname" . }}-dashboard
+  namespace: {{ default .Release.Namespace .Values.observability.grafanaDashboard.namespace }}
+  labels:
+    {{- include "synapse.labels" . | nindent 4 }}
+    # The Grafana dashboard sidecar watches for this label and imports any
+    # ConfigMap carrying it, so the value has to match the sidecar's config.
+    {{ .Values.observability.grafanaDashboard.label }}: {{ .Values.observability.grafanaDashboard.labelValue | quote }}
+    {{- with .Values.observability.grafanaDashboard.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "synapse.annotations" (dict "root" . "specific" (dict "grafana_folder" .Values.observability.grafanaDashboard.folder)) | nindent 4 }}
+data:
+  synapse-overview.json: |
+    {{- .Files.Get "files/dashboards/synapse-overview.json" | nindent 4 }}
+{{- end }}

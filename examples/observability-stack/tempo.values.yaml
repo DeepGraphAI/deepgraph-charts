@@ -1,0 +1,44 @@
+# Tempo: trace storage. Receives from the OTEL collector, queried by Grafana.
+#
+#   helm install tempo grafana/tempo -n observability -f tempo.values.yaml
+
+tempo:
+  retention: 168h  # 7 days
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Derives RED metrics from spans and writes them to Prometheus, which is
+  # what powers Grafana's service graph.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090/api/v1/write
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+persistence:
+  enabled: true
+  size: 50Gi
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack

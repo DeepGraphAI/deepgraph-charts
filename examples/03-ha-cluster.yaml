@@ -1,0 +1,145 @@
+# High availability: three-node Raft cluster
+# ------------------------------------------
+# Synapse replicates through Raft. Writes go to the leader and are committed
+# once a majority has them; a follower can serve stale reads. With three
+# voters the cluster survives losing one node.
+#
+# Prerequisites:
+#   1. A Secret holding the cluster mTLS material (ca.crt, tls.crt, tls.key).
+#      The Raft port carries replicated writes, so this is not optional in
+#      production - see docs/clustering.md for issuing it with cert-manager.
+#   2. Storage that can be provisioned per pod (each replica gets its own
+#      PVC; there is no shared volume).
+#
+#   helm install synapse synapse/synapse -n synapse -f examples/03-ha-cluster.yaml
+#
+# Use an odd replica count. Four voters tolerate the same single failure as
+# three while needing one more node to agree on every write.
+
+image:
+  repository: ghcr.io/deepgraphai/synapse
+  tag: "0.1.0"
+
+replicaCount: 3
+
+auth:
+  existingSecret: synapse-admin
+
+tier:
+  level: enterprise
+  existingLicenseSecret: synapse-license
+
+cluster:
+  enabled: true
+  raftPort: 5701
+  admin:
+    enabled: true
+    port: 5702
+  rpcTimeoutMs: 5000
+  tls:
+    enabled: true
+    existingSecret: synapse-cluster-tls
+  # LAN defaults are right for a single-region cluster. For multi-AZ or
+  # cross-region, raise all three together and keep
+  # heartbeat < electionMin < electionMax:
+  #   heartbeatIntervalMs: 500
+  #   electionTimeoutMinMs: 2500
+  #   electionTimeoutMaxMs: 5000
+  raft: {}
+
+persistence:
+  data:
+    enabled: true
+    size: 500Gi
+    storageClass: gp3
+    retentionPolicy:
+      # A scale-down should not destroy a replica's Raft log: the node may
+      # be re-added, and a discarded log forces a full snapshot transfer.
+      whenScaled: Retain
+      whenDeleted: Retain
+
+# Spread the voters across failure domains. Two replicas on one node means a
+# single node failure costs quorum, which is the whole point of running three.
+podAntiAffinity:
+  enabled: true
+  type: hard
+  topologyKey: kubernetes.io/hostname
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: synapse
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 24Gi
+  limits:
+    cpu: "8"
+    memory: 32Gi
+
+# Never let a voluntary disruption take a second node while one is already
+# down - that is quorum loss and the cluster stops accepting writes.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Rolling updates replace one pod at a time and wait for readiness, so a
+# rollout walks the cluster without dropping below quorum.
+updateStrategy:
+  type: RollingUpdate
+
+terminationGracePeriodSeconds: 300
+
+probes:
+  startup:
+    # A restarting replica replays its Raft log tail before serving. Give a
+    # large log room to catch up rather than restarting mid-replay.
+    failureThreshold: 180
+    periodSeconds: 10
+
+server:
+  logFormat: json
+  http:
+    enabled: true
+    debugEndpoints: false
+
+ml:
+  models: none
+
+networkPolicy:
+  enabled: true
+  allowedClients:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: applications
+
+observability:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    rules:
+      raftApplyLag:
+        enabled: true
+        threshold: 30
+        for: 5m
+        severity: warning
+      raftApplyErrors:
+        enabled: true
+        for: 5m
+        severity: critical
+  grafanaDashboard:
+    enabled: true
+
+# Client traffic is spread across all pods by default. Pin a client to one
+# pod for the life of its session so session-scoped state stays put.
+service:
+  sessionAffinity: ClientIP

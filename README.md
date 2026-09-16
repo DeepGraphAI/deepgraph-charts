@@ -34,6 +34,9 @@ off by default and turned on individually.
 - Kubernetes 1.23 or newer
 - Helm 3.8 or newer
 - A StorageClass that can provision `ReadWriteOnce` volumes
+- **A Synapse image you have built and pushed.** Synapse is not published to
+  Docker Hub or any public registry, so `image.repository` is required and has
+  no default - see [docs/installation.md](docs/installation.md#the-image)
 - For cluster mode: an image built with the `cluster` Cargo feature (it is not
   on by default), three or more nodes, and a Secret holding Raft mTLS material.
   See [docs/clustering.md](docs/clustering.md#prerequisites)

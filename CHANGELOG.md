@@ -64,7 +64,11 @@ Both exit with an explanatory message naming the image requirement.
 
 ### Requires
 
-An image built from Synapse main at or after the admin-password fix - it is the
+A Synapse image you have built and pushed. Synapse is not published to any
+public registry, so `image.repository` has no default and the chart refuses to
+render without it.
+
+That image must come from Synapse main at or after the admin-password fix - the
 one carrying the `set-admin-password` subcommand, which the chart uses to
 re-apply the password to an existing volume and probes for as a support check.
 Cluster mode additionally needs the `cluster` Cargo feature.

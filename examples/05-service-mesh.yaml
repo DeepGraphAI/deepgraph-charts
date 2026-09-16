@@ -16,7 +16,7 @@
 # the wire is protected without configuring TLS in the database.
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
 
 auth:

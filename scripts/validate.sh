@@ -9,6 +9,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHART="${REPO_ROOT}/charts/synapse"
 KUBE_VERSION="${KUBE_VERSION:-1.29.0}"
+# image.repository is required by the chart; supply one for rendering.
+TEST_IMAGE="${TEST_IMAGE:-registry.example.com/synapse}"
 
 pass=0
 fail=0
@@ -23,7 +25,7 @@ fi
 check() {
     local name="$1"; shift
     local out
-    if ! out=$(helm template test "${CHART}" --namespace synapse "$@" 2>&1); then
+    if ! out=$(helm template test "${CHART}" --namespace synapse --set image.repository="${TEST_IMAGE}" "$@" 2>&1); then
         printf '  FAIL  %-45s (render)\n' "${name}"
         echo "${out}" | sed 's/^/          /' | tail -5
         fail=$((fail + 1))
@@ -54,7 +56,7 @@ check() {
 # a broken combination is worse than refusing it.
 check_rejects() {
     local name="$1"; shift
-    if helm template test "${CHART}" --namespace synapse "$@" >/dev/null 2>&1; then
+    if helm template test "${CHART}" --namespace synapse --set image.repository="${TEST_IMAGE}" "$@" >/dev/null 2>&1; then
         printf '  FAIL  %-45s (should have been rejected)\n' "${name}"
         fail=$((fail + 1))
     else
@@ -64,7 +66,7 @@ check_rejects() {
 }
 
 echo "==> helm lint"
-helm lint "${CHART}" --set auth.password=test123
+helm lint "${CHART}" --set auth.password=test123 --set image.repository="${TEST_IMAGE}"
 
 echo
 echo "==> examples"
@@ -132,7 +134,7 @@ shell_check() {
     local name="$1"; shift
     local script
     script=$(mktemp)
-    if ! helm template test "${CHART}" --namespace synapse "$@" 2>/dev/null \
+    if ! helm template test "${CHART}" --namespace synapse --set image.repository="${TEST_IMAGE}" "$@" 2>/dev/null \
         | python3 -c "
 import sys, yaml
 for d in yaml.safe_load_all(sys.stdin):
@@ -165,6 +167,7 @@ shell_check "existing secret" --set auth.existingSecret=s
 
 echo
 echo "==> guards (these must be rejected)"
+check_rejects "no image repository" --set auth.password=t --set image.repository=""
 check_rejects "no password"
 check_rejects "cluster without persistence" --set auth.password=t \
     --set cluster.enabled=true --set persistence.data.enabled=false

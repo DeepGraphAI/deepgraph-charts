@@ -157,6 +157,9 @@ Probes, the ServiceMonitor, the Ingress and the UI all depend on it.
 {{- if and .Values.cluster.enabled (not .Values.persistence.data.enabled) -}}
 {{- fail "cluster.enabled requires persistence.data.enabled - the Raft log must survive a pod restart" -}}
 {{- end -}}
+{{- if not .Values.image.repository -}}
+{{- fail "set image.repository - Synapse is not published to a public registry, so the chart has no image to default to. Build the image, push it to a registry your cluster can pull from, and set image.repository to that path (for example ghcr.io/<org>/synapse). A bare name would resolve to docker.io/library/synapse, which is not this project." -}}
+{{- end -}}
 {{- if and (not .Values.auth.password) (not .Values.auth.existingSecret) -}}
 {{- fail "set auth.password or auth.existingSecret - refusing to deploy with an unset admin password" -}}
 {{- end -}}

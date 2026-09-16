@@ -17,7 +17,7 @@
 # triggers routing-table discovery, which Synapse does not implement.
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
 
 auth:

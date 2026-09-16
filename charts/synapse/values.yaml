@@ -11,8 +11,17 @@
 # Image
 # -----------------------------------------------------------------------------
 image:
-  # Registry path of the Synapse server image.
-  repository: synapse
+  # Registry path of the Synapse server image. REQUIRED - there is no
+  # default, because there is no published image to default to.
+  #
+  # Synapse is not distributed on Docker Hub or any public registry, so the
+  # chart cannot point at one. Build the image and push it somewhere your
+  # cluster can pull from, then set this to that path, for example
+  # "ghcr.io/<org>/synapse" or "<account>.dkr.ecr.<region>.amazonaws.com/synapse".
+  #
+  # A bare name like "synapse" is deliberately not the default: Docker would
+  # resolve it to docker.io/library/synapse, a namespace nobody here controls.
+  repository: ""
   # Image tag. Empty string means "use the chart's appVersion".
   tag: ""
   # Pin by digest instead of tag. When set, tag is ignored.

@@ -5,8 +5,8 @@
 #
 # Before installing, mirror the image:
 #
-#   docker pull ghcr.io/deepgraphai/synapse:0.1.0
-#   docker tag  ghcr.io/deepgraphai/synapse:0.1.0 registry.internal/synapse:0.1.0
+#   docker pull YOUR_REGISTRY/synapse:0.1.0
+#   docker tag  YOUR_REGISTRY/synapse:0.1.0 registry.internal/synapse:0.1.0
 #   docker push registry.internal/synapse:0.1.0
 #
 #   helm install synapse ./synapse-0.1.0.tgz -n synapse -f examples/07-air-gapped.yaml

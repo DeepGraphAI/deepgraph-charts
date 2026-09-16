@@ -7,7 +7,7 @@
 | Kubernetes 1.23+ | `persistentVolumeClaimRetentionPolicy` needs 1.27 for the default `Retain` behaviour to be honoured; on older clusters the field is ignored and PVCs are kept anyway |
 | Helm 3.8+ | |
 | A StorageClass | Must provision `ReadWriteOnce`. SSD-backed for anything beyond evaluation |
-| Access to the image | `ghcr.io/deepgraphai/synapse`, or a mirror in your own registry |
+| Access to the image | `YOUR_REGISTRY/synapse`, or a mirror in your own registry |
 
 Check what you have:
 
@@ -17,11 +17,84 @@ helm version --short
 kubectl get storageclass
 ```
 
+## The image
+
+Synapse is not published to Docker Hub, GHCR, or any other public registry.
+There is no image to pull, so `image.repository` is required and the chart
+refuses to render without it:
+
+```
+Error: set image.repository - Synapse is not published to a public registry,
+so the chart has no image to default to.
+```
+
+Build it and push it somewhere your cluster can pull from:
+
+```bash
+# In the Synapse repository
+docker build -f config/docker/Dockerfile -t ghcr.io/<org>/synapse:0.1.0 .
+docker push ghcr.io/<org>/synapse:0.1.0
+```
+
+Then point the chart at it:
+
+```yaml
+image:
+  repository: ghcr.io/<org>/synapse
+  tag: "0.1.0"
+  pullSecrets:
+    - ghcr-credentials      # if the package is private
+```
+
+Two build flags decide what the resulting image can do, and neither is on by
+default:
+
+| Need | Build with |
+|---|---|
+| Multi-node clustering (`cluster.enabled`) | `./scripts/build.sh --release --features cluster` |
+| Setting the admin password at all | Synapse main at or after the admin-password fix |
+
+The chart checks both at container start-up and exits with an explanation
+rather than deploying something that looks configured and is not.
+
+### Pulling from a private registry
+
+```bash
+kubectl -n synapse create secret docker-registry ghcr-credentials \
+  --docker-server=ghcr.io \
+  --docker-username=<github-user> \
+  --docker-password=<token-with-read:packages>
+```
+
+```yaml
+image:
+  pullSecrets:
+    - ghcr-credentials
+```
+
 ## Install
 
 ```bash
 helm repo add synapse https://deepgraphai.github.io/deepgraph-charts
 helm repo update
+```
+
+That URL serves only while the charts repository is public. While it is
+private, GitHub Pages puts the site behind a browser login, which `helm repo
+add` cannot authenticate to - it receives an HTML login page instead of
+`index.yaml`. Until then, install from a clone or from a release tarball:
+
+```bash
+git clone git@github.com:DeepGraphAI/deepgraph-charts.git
+helm install synapse ./deepgraph-charts/charts/synapse -n synapse -f my-values.yaml
+```
+
+Or, if the charts are published to an OCI registry, which does support
+credentials:
+
+```bash
+helm registry login ghcr.io -u <github-user> -p <token>
+helm install synapse oci://ghcr.io/<org>/charts/synapse --version 0.1.0 -n synapse
 ```
 
 Create the credentials Secret first, so the password never enters a values file
@@ -106,12 +179,12 @@ Mirror the image and pull the chart as a package:
 ```bash
 # On a connected machine
 helm pull synapse/synapse --version 0.1.0
-docker pull ghcr.io/deepgraphai/synapse:0.1.0
-docker save ghcr.io/deepgraphai/synapse:0.1.0 | gzip > synapse-image.tar.gz
+docker pull YOUR_REGISTRY/synapse:0.1.0
+docker save YOUR_REGISTRY/synapse:0.1.0 | gzip > synapse-image.tar.gz
 
 # Transfer synapse-0.1.0.tgz and synapse-image.tar.gz, then inside
 docker load < synapse-image.tar.gz
-docker tag ghcr.io/deepgraphai/synapse:0.1.0 registry.internal/synapse:0.1.0
+docker tag YOUR_REGISTRY/synapse:0.1.0 registry.internal/synapse:0.1.0
 docker push registry.internal/synapse:0.1.0
 
 helm install synapse ./synapse-0.1.0.tgz -n synapse -f examples/07-air-gapped.yaml

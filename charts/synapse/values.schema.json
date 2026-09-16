@@ -11,7 +11,7 @@
       "properties": {
         "repository": {
           "type": "string",
-          "minLength": 1
+          "description": "Registry path of the Synapse server image. Required; the chart fails at render time with an explanation when empty, since no public image exists to default to."
         },
         "tag": {
           "type": "string"

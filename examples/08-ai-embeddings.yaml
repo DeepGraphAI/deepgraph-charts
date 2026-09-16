@@ -17,7 +17,7 @@
 # pod is ready in about 20 seconds.
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
 
 auth:

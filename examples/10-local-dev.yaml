@@ -14,6 +14,8 @@
 # restart and publishes internals on an unauthenticated port.
 
 image:
+  # A bare name is fine here and only here: the image is side-loaded into
+  # the node below, so nothing is ever pulled from a registry.
   repository: synapse
   tag: latest
   # The image is side-loaded into the node, so never try to pull it.

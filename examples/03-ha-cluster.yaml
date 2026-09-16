@@ -23,7 +23,7 @@
 # three while needing one more node to agree on every write.
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
 
 replicaCount: 3

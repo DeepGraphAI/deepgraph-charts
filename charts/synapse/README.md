@@ -18,6 +18,7 @@ helm install synapse synapse/synapse \
 | Kubernetes | 1.23+ |
 | Helm | 3.8+ |
 | Storage | A StorageClass provisioning `ReadWriteOnce` |
+| Image | Your own build - Synapse is not on a public registry, so `image.repository` is required |
 
 ## Objects created
 
@@ -48,7 +49,7 @@ you are most likely to change.
 
 | Value | Default | |
 |---|---|---|
-| `image.repository` | `synapse` | Registry path |
+| `image.repository` | `""` | **Required** - no public image exists to default to |
 | `image.tag` | `""` | Empty means the chart's appVersion |
 | `replicaCount` | `1` | See the note below |
 | `auth.password` | `""` | **Required** unless `auth.existingSecret` |

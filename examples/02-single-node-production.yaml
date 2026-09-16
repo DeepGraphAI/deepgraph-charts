@@ -11,7 +11,7 @@
 #   helm install synapse synapse/synapse -n synapse -f examples/02-single-node-production.yaml
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 

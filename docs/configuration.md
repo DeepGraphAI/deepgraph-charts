@@ -8,7 +8,7 @@ same information inline.
 
 | Value | Default | Description |
 |---|---|---|
-| `image.repository` | `synapse` | Registry path |
+| `image.repository` | `""` | **Required** - registry path of your build |
 | `image.tag` | `""` | Empty means the chart's `appVersion` |
 | `image.digest` | `""` | Pin by digest. Overrides `tag` |
 | `image.pullPolicy` | `IfNotPresent` | |

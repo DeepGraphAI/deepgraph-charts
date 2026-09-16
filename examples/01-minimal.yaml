@@ -12,7 +12,10 @@
 # restricted network access, metrics scraping, or any redundancy.
 
 image:
-  repository: ghcr.io/deepgraphai/synapse
+  # Replace this. Synapse is not on any public registry, so there is no
+  # image to pull until you have built one and pushed it somewhere your
+  # cluster can reach. The chart refuses to render without it.
+  repository: YOUR_REGISTRY/synapse
   tag: "0.1.0"
 
 auth:

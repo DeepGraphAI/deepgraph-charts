@@ -43,17 +43,17 @@ databases behind one Service. The chart warns at install time. See
 | `auth.secretKeys.password` | `SYNAPSE_PASSWORD` | Key within `existingSecret` |
 | `auth.enforcePassword` | `true` | Apply `auth.password` at every start |
 
-`auth.enforcePassword` is what makes `auth.password` real. The server seeds its
-admin account with a hardcoded password during installation and ignores the
-credentials installation is given, so without this the deployment would come up
-on that built-in default however you configured it - silently. The chart applies
-the server's own reset path instead, in a process that exits before the server
-opens the database so the new password holds from the first boot.
+A fresh install always applies `auth.password`. `auth.enforcePassword` governs
+what happens on a volume that already holds an admin account: on, the configured
+password is re-applied at every start, so changing `auth.password` and upgrading
+rotates it; off, the account keeps whatever password it has, which is what you
+want when managing it through GQL.
 
-Because it re-applies on every start, the values file stays the source of truth
-and an out-of-band `ALTER USER` change is reverted at the next restart. Set it
-to `false` to manage the password in GQL instead. Full detail in
-[security.md](security.md#how-the-password-actually-gets-set).
+Both paths run in a process that exits before the server opens the database, so
+the server reads the new credential when it boots rather than serving a cached
+one. Requires an image carrying the admin-password fix; the chart refuses to
+start without it. Full detail in
+[security.md](security.md#how-the-password-gets-set).
 
 `auth.username` is only used for client connections; the admin account name
 itself is fixed by the server.

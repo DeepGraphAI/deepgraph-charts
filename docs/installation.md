@@ -20,7 +20,7 @@ kubectl get storageclass
 ## Install
 
 ```bash
-helm repo add synapse https://deepgraphai.github.io/synapse-helm
+helm repo add synapse https://deepgraphai.github.io/deepgraph-charts
 helm repo update
 ```
 

@@ -62,23 +62,16 @@ auth:
     username: SYNAPSE_USER
     password: SYNAPSE_PASSWORD
 
-  # Apply auth.password to the admin account on every start.
+  # Re-apply auth.password to an EXISTING data directory on every start.
   #
-  # This is on by default because the alternative is a database that
-  # silently runs with a well-known password. The server seeds its admin
-  # account with a hardcoded default during first-start bootstrap and does
-  # not read the password from the install step, so without this the
-  # password you set here would never take effect - the deployment would
-  # come up on the built-in default and you would have no indication of it.
+  # A first install always applies auth.password, whatever this is set to.
+  # This governs what happens afterwards, on a volume that already holds an
+  # admin account: on, the configured password is re-applied at every start,
+  # so changing auth.password and upgrading actually rotates it; off, the
+  # account keeps whatever password it has.
   #
-  # The mechanism is the server's own admin-password reset, applied at
-  # start-up. Because it runs on every start, the values file stays the
-  # source of truth: a password changed out of band with ALTER USER is
-  # reverted the next time the pod restarts.
-  #
-  # Set this to false if you intend to manage the admin password through
-  # GQL instead. Do that only after the first password change has landed,
-  # or the deployment stays on the built-in default.
+  # Leave it on unless you intend to manage the admin password through GQL,
+  # in which case a restart would otherwise revert your change.
   enforcePassword: true
 
 # -----------------------------------------------------------------------------

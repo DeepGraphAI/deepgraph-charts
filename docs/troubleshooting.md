@@ -72,6 +72,7 @@ kubectl -n synapse logs synapse-0 --previous
 |---|---|---|
 | Killed with no error, exit 137 | OOM | Raise `resources.limits.memory`. See below |
 | `FATAL: this image cannot run a multi-node cluster` | The image lacks the `cluster` build feature | Rebuild with `--features cluster`, or set `cluster.enabled=false`. See below |
+| `FATAL: this image cannot have its admin password set` | The image predates the admin-password fix | Use a newer image. See below |
 | Stalls installing Python packages, then killed | `ml.enabled` with no egress, or too small a startup budget | Set `ml.enabled: false`, or allow egress and raise `probes.startup.failureThreshold` |
 | `Permission denied` on `/synapse-data` | `fsGroup` does not match the volume | Leave `podSecurityContext.fsGroup` at the default |
 | `SYNAPSE_LICENSE_KEY required` | Tier requires a license | Set `tier.licenseKey` or `tier.existingLicenseSecret` |
@@ -213,16 +214,16 @@ First check what the pod was actually given:
 kubectl -n synapse get secret synapse-credentials -o jsonpath='{.data.SYNAPSE_PASSWORD}' | base64 -d
 ```
 
-If that matches what you configured, confirm the reset ran:
+If that matches, check whether the password was applied at all:
 
 ```bash
-kubectl -n synapse logs synapse-0 | grep -i "admin password"
+kubectl -n synapse logs synapse-0 | grep -iE "installation|admin password"
 ```
 
-You should see `applying the configured admin password` from the bootstrap
-script. If instead the built-in default still works, `auth.enforcePassword` is
-off - the server seeds its admin account with a hardcoded password and ignores
-what installation is given, so nothing else sets it:
+On a fresh volume you should see `running first-start installation`, which
+applies it. On an existing volume, `re-applying the configured admin password` -
+and if instead you see `auth.enforcePassword is false`, that is why a changed
+`auth.password` had no effect:
 
 ```bash
 helm upgrade synapse synapse/synapse -n synapse --reuse-values \
@@ -234,7 +235,22 @@ restart. That is `auth.enforcePassword` doing its job - it re-applies the values
 file on every start. Either update `auth.password`, or set
 `auth.enforcePassword: false` and manage it in GQL.
 
-See [security.md](security.md#how-the-password-actually-gets-set).
+See [security.md](security.md#how-the-password-gets-set).
+
+### `FATAL: this image cannot have its admin password set`
+
+The image predates the admin-password fix. Those builds accept the password
+given to installation and discard it, seeding a well-known default instead, so
+the chart refuses to deploy something that would look configured and not be.
+
+Check an image:
+
+```bash
+docker run --rm --entrypoint /app/bin/synapse <image> set-admin-password --help \
+  >/dev/null 2>&1 && echo supported || echo "NOT supported"
+```
+
+Use an image built from Synapse main at or after that fix.
 
 ---
 

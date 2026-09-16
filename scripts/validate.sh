@@ -124,6 +124,46 @@ check "label collision" --set auth.password=t \
     --set service.annotations.k=svc
 
 echo
+echo "==> generated bootstrap script is valid bash"
+# The bootstrap script is assembled by the template, so a conditional that
+# emits unbalanced shell is invisible to helm lint and to kubeconform - it
+# only shows up as a pod that will not start.
+shell_check() {
+    local name="$1"; shift
+    local script
+    script=$(mktemp)
+    if ! helm template test "${CHART}" --namespace synapse "$@" 2>/dev/null \
+        | python3 -c "
+import sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get('kind') == 'ConfigMap' and d['metadata']['name'].endswith('-bootstrap'):
+        sys.stdout.write(d['data']['bootstrap.sh'])
+" > "${script}"; then
+        printf '  FAIL  %-45s (could not extract)\n' "${name}"
+        fail=$((fail + 1)); rm -f "${script}"; return
+    fi
+    if bash -n "${script}" 2>/dev/null; then
+        printf '  ok    %-45s\n' "${name}"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  %-45s (bash syntax)\n' "${name}"
+        bash -n "${script}" 2>&1 | sed 's/^/          /' | head -5
+        fail=$((fail + 1))
+    fi
+    rm -f "${script}"
+}
+
+shell_check "default" --set auth.password=t
+shell_check "enforcePassword off" --set auth.password=t --set auth.enforcePassword=false
+shell_check "ml runtime on" --set auth.password=t --set ml.enabled=true \
+    --set probes.startup.failureThreshold=240
+shell_check "cluster" --set auth.password=t --set cluster.enabled=true --set replicaCount=3
+shell_check "cluster + ml + tls" --set auth.password=t --set cluster.enabled=true \
+    --set replicaCount=3 --set ml.enabled=true --set probes.startup.failureThreshold=300 \
+    --set cluster.tls.enabled=true --set cluster.tls.existingSecret=s
+shell_check "existing secret" --set auth.existingSecret=s
+
+echo
 echo "==> guards (these must be rejected)"
 check_rejects "no password"
 check_rejects "cluster without persistence" --set auth.password=t \

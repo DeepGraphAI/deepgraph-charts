@@ -90,7 +90,7 @@
         },
         "enforcePassword": {
           "type": "boolean",
-          "description": "Apply auth.password to the admin account at every start. Without it the server keeps the hardcoded password it bootstraps with."
+          "description": "Re-apply auth.password to an existing data directory at every start. A first install always applies it regardless. Turn off only to manage the admin password through GQL."
         }
       }
     },

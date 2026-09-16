@@ -161,47 +161,58 @@ data:
 
     cd /app
 
-    # ---- first-start installation ------------------------------------------
-    # Run here rather than leaving it to the image's entrypoint, so that the
-    # admin-password step below can run between installation and the server
-    # taking the database lock.
+    # ---- admin credentials: image support check -----------------------------
+    # Older images ignore the password given to `install` and seed the admin
+    # account with a well-known default instead. There is no way to set the
+    # real password on such an image, and the failure is silent - a successful
+    # install, no warning, and a database reachable on the documented default.
     #
-    # The credentials passed here do not set the password: the server seeds
-    # its admin account with a hardcoded one during this step and ignores
-    # what install is given. They are passed anyway so the command matches
-    # what the image itself runs. The password is applied in the next block.
+    # `set-admin-password` landed with the fix, so its presence is the signal
+    # that this image applies the password it is given.
+    if ! /app/bin/synapse set-admin-password --help >/dev/null 2>&1; then
+      log "FATAL: this image cannot have its admin password set."
+      log ""
+      log "  The server binary predates the admin-password fix: it accepts the"
+      log "  password given to installation and then discards it, seeding the"
+      log "  account with a well-known default instead. Deploying against it"
+      log "  would publish a database on that default with nothing to say so."
+      log ""
+      log "  Use an image built from Synapse main at or after the fix - it is"
+      log "  the one that carries the 'set-admin-password' subcommand."
+      exit 1
+    fi
+
+    # ---- first-start installation and admin password ------------------------
+    # Installation is run here rather than left to the image's entrypoint
+    # because the ml.enabled=false path below never reaches the entrypoint.
     #
-    # The reset variable is removed for this call because it would be
-    # consumed before the admin account exists, and silently skipped.
+    # On a fresh data directory `install --password` sets the account password
+    # itself, so nothing further is needed. On an existing one it is a no-op,
+    # and re-applying the configured password is what makes a changed
+    # auth.password take effect on a volume that was provisioned earlier.
+    #
+    # Both run in a short-lived process that exits before the server opens the
+    # database. That ordering is deliberate: a reset performed inside the
+    # running server persists the new hash while that process keeps answering
+    # from an auth cache populated earlier, so the credential would be correct
+    # on disk and wrong in the process actually serving queries.
     if [ ! -f "${SYNAPSE_DATA_DIR}/catalog/users.json" ]; then
       log "empty data directory: running first-start installation"
-      env -u SYNAPSE_ADMIN_RESET_PASSWORD /app/bin/synapse install --yes \
+      /app/bin/synapse install --yes \
         --user "${SYNAPSE_USER}" \
         --password "${SYNAPSE_PASSWORD}"
       log "installation complete"
     else
       log "existing installation found at ${SYNAPSE_DATA_DIR}"
-    fi
-
-    # ---- admin password ----------------------------------------------------
-    # Applied by a short-lived process that exits before the server opens the
-    # database, rather than by the server itself.
-    #
-    # The server's reset path writes the new password to the catalog but the
-    # process that performs it keeps serving from an authentication cache
-    # populated beforehand, so the account it actually accepts is still the
-    # old one until something reloads that cache. Letting the server do its
-    # own reset therefore leaves a live window - the whole first boot - in
-    # which the hardcoded bootstrap password is still valid.
-    #
-    # Doing it here closes that window: this process applies and persists the
-    # reset, exits, and the server then reads the updated catalog from disk.
-    # The server runs with the variable removed so it never takes the
-    # in-process path at all.
-    if [ -n "${SYNAPSE_ADMIN_RESET_PASSWORD:-}" ]; then
-      log "applying the configured admin password"
-      /app/bin/synapse install --yes >/dev/null 2>&1 || true
+      {{- if .Values.auth.enforcePassword }}
+      log "re-applying the configured admin password"
+      /app/bin/synapse set-admin-password --password "${SYNAPSE_PASSWORD}"
       log "admin password applied"
+      {{- else }}
+      # auth.enforcePassword is off: whatever the account's password is now
+      # stays as it is, including a change made through GQL.
+      log "auth.enforcePassword is false: leaving the existing admin password alone"
+      {{- end }}
     fi
 
     {{- if .Values.ml.enabled }}
@@ -211,7 +222,7 @@ data:
     # done and skips it, builds the Python environment (~4GB, 15-30 minutes
     # on a cold volume), downloads models per SYNAPSE_MODELS, and serves.
     log "ml.enabled=true: using the image entrypoint (builds the Python environment on a cold volume)"
-    exec env -u SYNAPSE_ADMIN_RESET_PASSWORD /docker-entrypoint.sh "$@"
+    exec /docker-entrypoint.sh "$@"
     {{- else }}
 
     # ---- AI runtime disabled ------------------------------------------------
@@ -233,7 +244,7 @@ data:
     fi
 
     log "starting synapse-server on ${SERVER_ADDRESS}:${SERVER_PORT}"
-    exec env -u SYNAPSE_ADMIN_RESET_PASSWORD /app/bin/synapse-server \
+    exec /app/bin/synapse-server \
       --address "${SERVER_ADDRESS}" \
       --port "${SERVER_PORT}" \
       --log-level "${RUST_LOG}" \

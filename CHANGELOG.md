@@ -33,12 +33,12 @@ contradicted the obvious assumption.
   start whether or not any AI feature is used. The server does not need it - a
   missing environment is a start-up warning - so the chart starts the server
   directly. Measured: 20 seconds to ready, against 7m45s with the build.
-- **`auth.enforcePassword: true`.** The server seeds its admin account with a
-  hardcoded password and ignores the credentials installation is given, so
-  `auth.password` alone has no effect and the deployment comes up on a known
-  default. The chart applies the server's reset path in a process that exits
-  before the server opens the database, so the configured password holds from
-  the first boot.
+- **`auth.enforcePassword: true`.** A fresh install applies `auth.password`
+  directly; this governs whether it is re-applied to a volume that already holds
+  an admin account, so that changing `auth.password` and upgrading actually
+  rotates it. Both paths run in a process that exits before the server opens the
+  database, so the server reads the new credential at boot rather than serving a
+  cached one.
 - **`off_row.enabled = false` in cluster mode.** Off-row payload bytes are not
   replicated; the server refuses to start a multi-node configuration with them
   on, so the chart turns them off rather than letting the pod crash-loop.
@@ -49,13 +49,25 @@ Refused at render time: no admin password; clustering without persistence;
 metrics or ingress without the HTTP listener; two license sources; `ml.enabled`
 with a startup-probe budget too small for the environment build.
 
-Refused at container start-up, where the image has to be inspected: cluster mode
-on an image built without the `cluster` Cargo feature. Such a server ignores the
-peer list and starts alone, as would every other pod, producing N independent
-databases behind one Service that diverge from the first write - the chart exits
-with an explanatory message instead.
+Refused at container start-up, where the image has to be inspected:
+
+- Cluster mode on an image built without the `cluster` Cargo feature. Such a
+  server ignores the peer list and starts alone, as would every other pod,
+  producing N independent databases behind one Service that diverge from the
+  first write.
+- Any deployment on an image predating the admin-password fix, which discards
+  the password given to installation and seeds a well-known default instead.
+
+Both exit with an explanatory message naming the image requirement.
 
 `values.schema.json` catches mistyped keys at install rather than ignoring them.
+
+### Requires
+
+An image built from Synapse main at or after the admin-password fix - it is the
+one carrying the `set-admin-password` subcommand, which the chart uses to
+re-apply the password to an existing volume and probes for as a support check.
+Cluster mode additionally needs the `cluster` Cargo feature.
 
 ### Documentation
 

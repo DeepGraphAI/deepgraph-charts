@@ -27,36 +27,30 @@ Secret in plaintext, which means `helm get values` prints it, and it stays in
 release history across upgrades. With `existingSecret` the chart only ever
 references the name.
 
-### How the password actually gets set
+### How the password gets set
 
-Worth knowing, because the obvious assumption is wrong and the failure is
-silent.
-
-The server seeds its admin account during first-start installation with a
-**hardcoded password**, and it ignores the credentials the install command is
-given. So passing `--user` and `--password` to installation - which is what the
-image's own entrypoint does - has no effect on the resulting account. A
-deployment set up that way comes up on the built-in default no matter what you
-configured, and nothing reports it.
-
-The only supported way to set a real password is the server's admin-password
-reset, which runs at start-up when the account already exists. The chart drives
-that for you, controlled by `auth.enforcePassword` (on by default):
+A fresh install applies `auth.password` directly. On a volume that already
+holds an admin account, the chart re-applies it at every start, which is what
+`auth.enforcePassword` governs:
 
 ```yaml
 auth:
   existingSecret: synapse-admin
-  enforcePassword: true
+  enforcePassword: true     # the default
 ```
 
-There is a timing detail the chart handles. The reset writes the new password to
-the catalog, but the process performing it keeps serving from an authentication
-cache populated beforehand, so that same process still accepts the old password
-until something reloads it. Letting the server reset its own password therefore
-leaves the entire first boot as a window in which the built-in default is valid.
-The chart applies the reset in a short-lived process that exits before the server
-opens the database, so the server starts from the updated catalog and the
-configured password is in force from the first boot.
+Both run in a short-lived process that exits before the server opens the
+database. That ordering matters and is not incidental: a reset performed inside
+the running server persists the new hash while that same process keeps answering
+from an authentication cache populated earlier, so the credential ends up
+correct on disk and wrong in the process actually serving queries.
+
+**This requires an image carrying the admin-password fix.** Earlier builds
+accepted the password given to installation and discarded it, seeding a
+well-known default instead - a successful install, no warning, and a database
+reachable on that default. The chart checks for the `set-admin-password`
+subcommand, which shipped with the fix, and refuses to start without it rather
+than deploy something that looks configured and is not.
 
 Verify it, rather than assuming:
 
@@ -70,14 +64,23 @@ kubectl -n synapse exec -it synapse-0 -- synapse-client \
   --host 127.0.0.1 --port 50051 --user admin --password admin123
 ```
 
-Because the reset runs on every start, the values file stays the source of
-truth: a password changed out of band with `ALTER USER` is reverted at the next
-restart. If you would rather manage it in GQL, set
-`auth.enforcePassword: false` - but only after a password change has landed, or
-the deployment sits on the built-in default.
+Because it re-applies on every start, the values file stays the source of truth:
+a password changed out of band with `ALTER USER` is reverted at the next
+restart. To manage it in GQL instead, set `auth.enforcePassword: false`.
 
 ```gql
 ALTER USER admin SET PASSWORD 'new-password';
+```
+
+Rotating through the chart is the other direction - update the Secret and
+restart, and the new password is applied on the way up:
+
+```bash
+kubectl -n synapse create secret generic synapse-admin \
+  --from-literal=SYNAPSE_USER=admin \
+  --from-literal=SYNAPSE_PASSWORD="$(openssl rand -base64 24)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n synapse rollout restart statefulset/synapse
 ```
 
 An existing Secret may use any key names:

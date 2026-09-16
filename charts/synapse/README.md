@@ -5,7 +5,7 @@ hybrid database speaking ISO GQL, as a StatefulSet with persistent per-pod
 storage.
 
 ```bash
-helm repo add synapse https://deepgraphai.github.io/synapse-helm
+helm repo add synapse https://deepgraphai.github.io/deepgraph-charts
 helm install synapse synapse/synapse \
   --namespace synapse --create-namespace \
   --set auth.password="$(openssl rand -base64 24)"

@@ -1,10 +1,11 @@
-# Synapse Helm charts
+# DeepGraph Helm charts
 
-Helm charts for deploying [Synapse](https://github.com/deepgraphai/Synapse), a
-graph + vector hybrid database that speaks ISO GQL.
+Helm charts for DeepGraph products. Today that is one chart, `synapse`, which
+deploys [Synapse](https://github.com/deepgraphai/Synapse) - a graph + vector
+hybrid database that speaks ISO GQL.
 
 ```bash
-helm repo add synapse https://deepgraphai.github.io/synapse-helm
+helm repo add synapse https://deepgraphai.github.io/deepgraph-charts
 helm repo update
 
 helm install synapse synapse/synapse \

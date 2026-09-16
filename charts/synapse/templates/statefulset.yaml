@@ -221,23 +221,6 @@ spec:
                   name: {{ .Values.auth.existingSecret }}
                   key: {{ .Values.auth.secretKeys.password }}
             {{- end }}
-            {{- if .Values.auth.enforcePassword }}
-            # The server seeds its admin account with a hardcoded default and
-            # ignores the password given to the install step, so without this
-            # the deployment would come up on that default no matter what
-            # auth.password says. This is the server's own reset path, applied
-            # at start-up, and it is what actually makes auth.password real.
-            - name: SYNAPSE_ADMIN_RESET_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  {{- if .Values.auth.existingSecret }}
-                  name: {{ .Values.auth.existingSecret }}
-                  key: {{ .Values.auth.secretKeys.password }}
-                  {{- else }}
-                  name: {{ include "synapse.fullname" . }}-credentials
-                  key: SYNAPSE_PASSWORD
-                  {{- end }}
-            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

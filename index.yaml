@@ -1,0 +1,31 @@
+apiVersion: v1
+entries:
+  synapse:
+  - annotations:
+      category: Database
+      licenses: Proprietary
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-09-16T05:49:37.227201399Z"
+    description: Synapse - a graph + vector hybrid database with ISO GQL, vector search,
+      and full-text search
+    digest: 49eba198dc65e54f3a95f76664701a17a2570d0f7e92ba9ced45ede82b947d60
+    home: https://github.com/deepgraphai/Synapse
+    keywords:
+    - synapse
+    - graph-database
+    - vector-database
+    - gql
+    - iso-gql
+    - opencypher
+    - hybrid-search
+    - knowledge-graph
+    kubeVersion: '>=1.23.0-0'
+    name: synapse
+    sources:
+    - https://github.com/deepgraphai/Synapse
+    type: application
+    urls:
+    - https://github.com/DeepGraphAI/deepgraph-charts/releases/download/synapse-0.1.0/synapse-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-09-16T05:49:37.227208102Z"

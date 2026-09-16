@@ -33,5 +33,9 @@ jobs:
       - uses: helm/chart-releaser-action@v1
         with:
           charts_dir: charts
+          # A docs-only or CI-only commit leaves the chart version alone, and
+          # re-releasing an existing tag is a 422. Skip rather than fail, so a
+          # red workflow always means something actually broke.
+          skip_existing: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"

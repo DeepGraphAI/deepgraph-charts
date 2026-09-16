@@ -3,6 +3,21 @@
 Chart versions follow semantic versioning independently of the Synapse version
 they deploy. `appVersion` tracks Synapse; `version` tracks the chart.
 
+## 0.2.0
+
+**Breaking:** `image.repository` no longer has a default and must be set.
+
+Synapse is not published to any public registry. The previous default,
+`synapse`, resolved to `docker.io/library/synapse` - a namespace this project
+does not own - and the examples pointed at a GHCR path where nothing usable is
+published. Both would have sent an operator to the wrong image or to none. The
+chart now fails at render time naming what to set and why, and the examples
+carry an obvious placeholder.
+
+`docs/installation.md` gains the missing half: building and pushing the image,
+the two build flags that decide whether clustering and the admin password work,
+wiring a pull secret, and installing while the charts repository is private.
+
 ## 0.1.0
 
 First release. Validated against a real Synapse image on a k3s cluster, not

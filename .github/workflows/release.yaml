@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "charts/**"
+  # Manual re-run, for when a release needs retrying without a chart change
+  # (a transient API failure, or re-publishing the index).
+  workflow_dispatch:
 
 permissions:
   contents: write

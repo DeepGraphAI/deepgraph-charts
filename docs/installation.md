@@ -79,22 +79,17 @@ helm repo add synapse https://deepgraphai.github.io/deepgraph-charts
 helm repo update
 ```
 
-That URL serves only while the charts repository is public. While it is
-private, GitHub Pages puts the site behind a browser login, which `helm repo
-add` cannot authenticate to - it receives an HTML login page instead of
-`index.yaml`. Until then, install from a clone or from a release tarball:
+No credentials are needed for that - the charts are public. The image is not,
+which is the split that matters: anyone can read and render the charts, and
+only people you have granted registry access can actually pull a server and
+run it.
+
+Working from a clone is equivalent, and is what to do when testing an
+unreleased change:
 
 ```bash
-git clone git@github.com:DeepGraphAI/deepgraph-charts.git
+git clone https://github.com/DeepGraphAI/deepgraph-charts.git
 helm install synapse ./deepgraph-charts/charts/synapse -n synapse -f my-values.yaml
-```
-
-Or, if the charts are published to an OCI registry, which does support
-credentials:
-
-```bash
-helm registry login ghcr.io -u <github-user> -p <token>
-helm install synapse oci://ghcr.io/<org>/charts/synapse --version 0.1.0 -n synapse
 ```
 
 Create the credentials Secret first, so the password never enters a values file

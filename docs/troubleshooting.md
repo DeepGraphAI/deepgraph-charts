@@ -75,7 +75,7 @@ kubectl -n synapse logs synapse-0 --previous
 | `FATAL: this image cannot have its admin password set` | The image predates the admin-password fix | Use a newer image. See below |
 | Stalls installing Python packages, then killed | `ml.enabled` with no egress, or too small a startup budget | Set `ml.enabled: false`, or allow egress and raise `probes.startup.failureThreshold` |
 | `Permission denied` on `/synapse-data` | `fsGroup` does not match the volume | Leave `podSecurityContext.fsGroup` at the default |
-| `SYNAPSE_LICENSE_KEY required` | Tier requires a license | Set `tier.licenseKey` or `tier.existingLicenseSecret` |
+| Licence errors | Trial expired, or a licence was supplied that the server cannot read | The server reads a signed `synapse.lic` file; set `tier.license` or `tier.existingLicenseSecret`, not an env var |
 | Config parse error | Invalid `config.synapseToml`, or a hand-written `[cluster]` section | Remove `[cluster]`; the chart generates it |
 
 ### Killed during startup, no obvious error

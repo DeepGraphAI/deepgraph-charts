@@ -116,7 +116,7 @@ check "pdb + nodeport" --set auth.password=t --set podDisruptionBudget.enabled=t
     --set service.type=NodePort --set service.nodePorts.grpc=30051
 check "external auth" --set auth.password=t --set externalAuth.enabled=true \
     --set externalAuth.existingSecret=ext
-check "license inline" --set auth.password=t --set tier.licenseKey=abc
+check "license inline" --set auth.password=t --set tier.license=abc
 check "digest pin" --set auth.password=t \
     --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
 check "fullnameOverride" --set auth.password=t --set fullnameOverride=db
@@ -176,7 +176,7 @@ check_rejects "servicemonitor without http" --set auth.password=t \
 check_rejects "ingress without http" --set auth.password=t \
     --set server.http.enabled=false --set ingress.enabled=true
 check_rejects "two license sources" --set auth.password=t \
-    --set tier.licenseKey=a --set tier.existingLicenseSecret=b
+    --set tier.license=a --set tier.existingLicenseSecret=b
 check_rejects "ml runtime with too small a startup budget" --set auth.password=t \
     --set ml.enabled=true --set probes.startup.failureThreshold=60
 

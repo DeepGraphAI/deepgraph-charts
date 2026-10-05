@@ -3,6 +3,26 @@
 Chart versions follow semantic versioning independently of the Synapse version
 they deploy. `appVersion` tracks Synapse; `version` tracks the chart.
 
+## 0.3.0
+
+**Breaking:** `tier.licenseKey` is replaced by `tier.license`, and `tier.level`
+no longer accepts `professional`.
+
+`tier.licenseKey` injected `SYNAPSE_LICENSE_KEY`, which nothing in the server
+reads - the licence loader searches for a signed `synapse.lic` file. A licence
+set that way was silently ignored. `tier.license` now takes the file contents
+and mounts them where the loader looks; `tier.existingLicenseSecret` takes a
+Secret holding a `synapse.lic` key. Verified in a running pod.
+
+`professional` was in the schema but is not a tier the server parses - only
+`enterprise` and `graphlite` - so it failed at start-up rather than at render.
+
+New `lifecycle.preStopSleepSeconds` (default 5) pauses before shutdown so the
+pod leaves Service endpoints before the container stops. Without it a rollout
+races endpoint withdrawal against termination and a load balancer can still be
+sending requests, which shows up as connection resets during an ordinary
+deploy.
+
 ## 0.2.0
 
 **Breaking:** `image.repository` no longer has a default and must be set.

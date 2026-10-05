@@ -62,8 +62,8 @@ itself is fixed by the server.
 
 | Value | Default | Description |
 |---|---|---|
-| `tier.level` | `enterprise` | `enterprise`, `professional` or `graphlite` |
-| `tier.licenseKey` | `""` | Injected as `SYNAPSE_LICENSE_KEY` |
+| `tier.level` | `enterprise` | `enterprise` or `graphlite` - the only two the server parses |
+| `tier.license` | `""` | Contents of a signed `synapse.lic`. Mounted as a file |
 | `tier.existingLicenseSecret` | `""` | Secret holding a `SYNAPSE_LICENSE_KEY` key |
 
 The tier gates features: vector search, model management and the AI runtime are

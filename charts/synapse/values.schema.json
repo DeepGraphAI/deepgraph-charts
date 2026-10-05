@@ -101,15 +101,15 @@
         "level": {
           "enum": [
             "enterprise",
-            "professional",
             "graphlite"
           ]
         },
-        "licenseKey": {
-          "type": "string"
-        },
         "existingLicenseSecret": {
           "type": "string"
+        },
+        "license": {
+          "type": "string",
+          "description": "Contents of a signed synapse.lic file. The server has no env-var licence form."
         }
       }
     },
@@ -923,6 +923,17 @@
     },
     "podLabels": {
       "type": "object"
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preStopSleepSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Pause before shutdown so Service endpoints withdraw first; 0 disables."
+        }
+      }
     }
   },
   "$defs": {

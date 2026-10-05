@@ -179,13 +179,6 @@ spec:
             - secretRef:
                 name: {{ include "synapse.fullname" . }}-credentials
             {{- end }}
-            {{- if .Values.tier.existingLicenseSecret }}
-            - secretRef:
-                name: {{ .Values.tier.existingLicenseSecret }}
-            {{- else if .Values.tier.licenseKey }}
-            - secretRef:
-                name: {{ include "synapse.fullname" . }}-license
-            {{- end }}
             {{- with .Values.extraEnvFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -224,6 +217,17 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.lifecycle.preStopSleepSeconds }}
+          lifecycle:
+            preStop:
+              # Endpoint removal and container shutdown race: without a pause
+              # the pod can stop accepting while a load balancer is still
+              # sending it requests, which surfaces as connection resets
+              # during an ordinary rollout. Sleeping lets the endpoint
+              # withdrawal propagate first.
+              exec:
+                command: ["/bin/sh", "-c", "sleep {{ .Values.lifecycle.preStopSleepSeconds }}"]
+          {{- end }}
           {{- if .Values.probes.startup.enabled }}
           # Synapse opens RocksDB, rebuilds vector and text indexes, and in
           # cluster mode replays the Raft log tail before it serves. The
@@ -301,6 +305,12 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- if or .Values.tier.license .Values.tier.existingLicenseSecret }}
+            # Searched by the licensing loader; there is no env-var form.
+            - name: license
+              mountPath: /etc/synapse/license
+              readOnly: true
+            {{- end }}
             {{- if .Values.externalAuth.enabled }}
             - name: external-auth
               mountPath: /etc/synapse-auth
@@ -338,6 +348,11 @@ spec:
           secret:
             secretName: {{ .Values.cluster.tls.existingSecret }}
         {{- end }}
+        {{- end }}
+        {{- if or .Values.tier.license .Values.tier.existingLicenseSecret }}
+        - name: license
+          secret:
+            secretName: {{ default (printf "%s-license" (include "synapse.fullname" .)) .Values.tier.existingLicenseSecret }}
         {{- end }}
         {{- if .Values.externalAuth.enabled }}
         - name: external-auth

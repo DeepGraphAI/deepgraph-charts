@@ -163,8 +163,8 @@ Probes, the ServiceMonitor, the Ingress and the UI all depend on it.
 {{- if and (not .Values.auth.password) (not .Values.auth.existingSecret) -}}
 {{- fail "set auth.password or auth.existingSecret - refusing to deploy with an unset admin password" -}}
 {{- end -}}
-{{- if and .Values.tier.licenseKey .Values.tier.existingLicenseSecret -}}
-{{- fail "set either tier.licenseKey or tier.existingLicenseSecret, not both" -}}
+{{- if and .Values.tier.license .Values.tier.existingLicenseSecret -}}
+{{- fail "set either tier.license or tier.existingLicenseSecret, not both" -}}
 {{- end -}}
 {{/*
 With the AI runtime on, the first start builds a ~4GB Python environment

@@ -87,12 +87,17 @@ auth:
 # Tier and licensing
 # -----------------------------------------------------------------------------
 tier:
-  # enterprise | professional | graphlite
+  # enterprise | graphlite. These are the only two the server parses;
+  # anything else fails at start-up.
   level: enterprise
-  # License key, injected as SYNAPSE_LICENSE_KEY.
-  licenseKey: ""
-  # Read the license from an existing Secret instead. The Secret must hold
-  # a SYNAPSE_LICENSE_KEY key.
+  # Licence. The server reads a signed `synapse.lic` FILE - there is no
+  # env-var form, so a key pasted here would do nothing. Supply the file
+  # contents inline, or point at a Secret holding a `synapse.lic` key.
+  #
+  # Neither is needed to start: a fresh install runs on an automatic
+  # 30-day trial.
+  license: ""
+  # Secret holding a `synapse.lic` key. Mutually exclusive with `license`.
   existingLicenseSecret: ""
 
 # -----------------------------------------------------------------------------
@@ -410,6 +415,13 @@ priorityClassName: ""
 
 # RocksDB flushes and the Raft log need time to settle on shutdown.
 terminationGracePeriodSeconds: 120
+
+lifecycle:
+  # Seconds to pause before the container begins shutting down, so the pod is
+  # removed from Service endpoints first. Without it a rollout produces
+  # connection resets, because endpoint withdrawal and container termination
+  # race and a load balancer can still be sending traffic. Set to 0 to disable.
+  preStopSleepSeconds: 5
 
 updateStrategy:
   type: RollingUpdate

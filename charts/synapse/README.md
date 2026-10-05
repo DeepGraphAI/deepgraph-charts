@@ -101,7 +101,7 @@ deployment:
 - `cluster.enabled` without `persistence.data.enabled`
 - `observability.serviceMonitor.enabled` or `ingress.enabled` without
   `server.http.enabled`
-- `tier.licenseKey` and `tier.existingLicenseSecret` both set
+- `tier.license` and `tier.existingLicenseSecret` both set
 - `ml.enabled` with a startup-probe budget too small for the environment build
 - `cluster.enabled` on an image built without multi-node support (checked at
   container start-up, since the chart cannot inspect the image at render time)

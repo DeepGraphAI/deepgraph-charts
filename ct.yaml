@@ -3,8 +3,10 @@ remote: origin
 target-branch: main
 chart-dirs:
   - charts
-validate-maintainers: false
 check-version-increment: true
-# The chart refuses to render without an admin password, so ct needs one for
-# its lint and install passes.
-helm-extra-set-args: --set=auth.password=ct-test-password
+# The chart refuses to render without an admin password or an image, so ct
+# needs both for its lint and install passes.
+helm-extra-set-args: --set=auth.password=ct-test-password --set=image.repository=registry.example.com/synapse
+
+# Maintainers are declared in Chart.yaml, so the check can stay on.
+

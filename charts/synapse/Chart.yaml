@@ -11,6 +11,10 @@ appVersion: "0.1.0"
 
 kubeVersion: ">=1.23.0-0"
 
+maintainers:
+  - name: DeepGraphAI
+    url: https://github.com/DeepGraphAI
+
 home: https://github.com/deepgraphai/Synapse
 sources:
   - https://github.com/deepgraphai/Synapse
